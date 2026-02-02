@@ -25,6 +25,7 @@ This system helps active traders answer critical questions:
 | Cross-Sectional Analysis | Rank stocks by composite factor scores | Generate quantifiable long/short candidates |
 | Regime Detection | HMM-based market state identification | Adjust factor exposure based on bull/bear/volatile conditions |
 | Signal Backtesting | Walk-forward testing with performance attribution | Validate strategies before risking capital |
+| PIT Universe Construction | Reconstructs historical market state including delisted stocks | Eliminate survivorship bias from backtests |
 | Interactive Dashboard | Streamlit UI for real-time monitoring | Visual factor monitoring without coding |
 
 ## Factor Discovery with Residualization
@@ -41,6 +42,163 @@ The factor discovery system automatically residualizes stock returns against mar
 **Sector ETFs Used:** XLK (Technology), XLF (Financials), XLE (Energy), XLI (Industrials), XLP (Consumer Staples), XLY (Consumer Discretionary), XLB (Materials), XLU (Utilities), XLRE (Real Estate), XLC (Communication Services)
 
 **Factor Orthogonality:** Non-orthogonal methods (ICA, NMF, Autoencoder) are automatically orthogonalized post-discovery using symmetric SVD-based orthogonalization. This prevents optimizers from double-counting correlated signals.
+
+## Point-in-Time (PIT) Universe Construction
+
+The PIT Universe Generation system eliminates **survivorship bias** and **look-ahead bias** from backtesting by reconstructing historical market states using Alpha Vantage LISTING_STATUS data.
+
+### The Problem
+
+Traditional backtests using `get_etf_holdings()` project current ETF constituents into the past. This creates false performance metrics because:
+- **Survivorship Bias**: Delisted stocks (Lehman Brothers, Silicon Valley Bank) are excluded
+- **Look-ahead Bias**: Companies that didn't exist yet are included in historical universes
+
+### The Solution
+
+The PIT system reconstructs the actual market state on any historical date:
+
+1. **Fetches both active AND delisted stocks** from LISTING_STATUS endpoint
+2. **Filters by liquidity** using dollar volume calculations
+3. **Stores historical state** in the `historical_universes` table
+4. **Retrieves true PIT universe** during backtesting
+
+### Quick Example
+
+```python
+from src.research import FactorResearchSystem
+
+frs = FactorResearchSystem(api_key, universe=["SPY"])
+
+# Get the TRUE investable universe on Sept 15, 2008 (Lehman bankruptcy)
+tickers = frs.get_backtest_universe('2008-09-15', top_n=500)
+
+# Verify PIT is working (LEH = Lehman Brothers)
+if 'LEH' in tickers:
+    print("✓ PIT correctly includes delisted stocks")
+
+# Verify with QA helper
+result = frs.verify_pit_universe('2008-09-15', ['LEH'])
+assert result['pass'], "Survivorship bias detected!"
+```
+
+### PIT vs Legacy Comparison
+
+```python
+# ❌ WRONG: Current constituents projected to past (biased)
+biased_universe = backend.get_etf_holdings("SPY")['constituent'].tolist()
+# Returns: ['AAPL', 'MSFT', 'NVDA', ...]  # LEH missing!
+
+# ✅ CORRECT: True historical state (unbiased)
+ unbiased_universe = frs.get_backtest_universe('2008-09-15')
+# Returns: ['AAPL', 'MSFT', 'LEH', ...]  # LEH included!
+```
+
+### Building PIT Universes
+
+```python
+from src.alphavantage_system import DataBackend
+
+backend = DataBackend(api_key)
+
+# Build universe for a specific date (API intensive - run monthly)
+universe_df = backend.build_point_in_time_universe(
+    date_str='2008-09-15',
+    top_n=500,
+    exchanges=['NYSE', 'NASDAQ']
+)
+
+# Check results
+print(f"Universe size: {len(universe_df)}")
+print(f"Delisted stocks: {(universe_df['status'] == 'Delisted').sum()}")
+```
+
+### Configuration
+
+Environment variables for PIT behavior:
+
+```bash
+# Default universe size
+PIT_UNIVERSE_TOP_N=500
+
+# Exchanges to include (reduces API calls)
+PIT_UNIVERSE_EXCHANGES=NYSE,NASDAQ
+
+# Dollar volume calculation window
+PIT_VOLUME_WINDOW_DAYS=20
+
+# Use PIT by default for backtesting
+PIT_DEFAULT_TO_PIT=true
+```
+
+### QA Verification (Critical Tests)
+
+Before deploying to live capital, run these tests:
+
+```bash
+# Run all PIT tests
+pytest tests/test_pit_universe.py -v
+
+# Critical QA checks
+pytest tests/test_pit_universe.py::TestPITUniverseQA -v
+```
+
+**Test 1: Lehman Brothers (2008)**
+- Date: `2008-09-15`
+- Expected: `LEH` ticker present
+- Failure indicates survivorship bias
+
+**Test 2: Silicon Valley Bank (2023)**
+- Date: `2023-01-01`
+- Expected: `SIVB` ticker present
+- Failure indicates survivorship bias
+
+```bash
+# Standalone verification script
+python tests/test_pit_universe.py
+```
+
+### Usage in Backtesting
+
+```python
+from src.research import FactorResearchSystem
+import pandas as pd
+
+frs = FactorResearchSystem(api_key, universe=["SPY"])
+
+# Walk-forward backtest with PIT universes
+backtest_dates = pd.date_range('2008-01-01', '2023-12-31', freq='MS')
+
+for date in backtest_dates:
+    # Get true historical universe for this date
+    universe = frs.get_backtest_universe(date.strftime('%Y-%m-%d'))
+    
+    # Run factor model on this date's universe only
+    frs.universe = universe
+    frs.fit_factors()
+    
+    # Generate signals...
+```
+
+### Database Schema
+
+The `historical_universes` table stores PIT state:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| date | TEXT | Reference date (YYYY-MM-DD) |
+| ticker | TEXT | Stock symbol |
+| asset_type | TEXT | 'Stock' or 'ETF' |
+| status | TEXT | 'Active' or 'Delisted' |
+| dollar_volume | REAL | 20-day avg dollar volume |
+
+```sql
+-- Query historical universe
+SELECT ticker, status, dollar_volume
+FROM historical_universes
+WHERE date = '2008-09-15'
+ORDER BY dollar_volume DESC
+LIMIT 500;
+```
 
 ## Quick Start
 
@@ -256,13 +414,32 @@ uv run python -m src regime detect --universe SPY --regimes 3 --predict 5
 
 ### Signal Backtesting
 
-**What it does:** Validates signal efficacy using walk-forward testing.
+**What it does:** Validates signal efficacy using walk-forward testing with Point-in-Time (PIT) universes to eliminate survivorship bias.
 
 ```bash
 # Run backtest
 uv run python -m src backtest --universe SPY \
   --train-size 252 --test-size 63 --walks 10 \
   --optimize --report
+```
+
+**PIT Universe in Backtesting:**
+
+```python
+from src.research import FactorResearchSystem
+
+frs = FactorResearchSystem(api_key, universe=["SPY"])
+
+# Get PIT universe for a specific backtest date
+tickers = frs.get_backtest_universe('2008-09-15', top_n=500)
+
+# Use in walk-forward loop
+for date in backtest_dates:
+    # True historical universe (includes delisted stocks)
+    universe = frs.get_backtest_universe(date.strftime('%Y-%m-%d'))
+    
+    # Run analysis on this date's actual investable universe
+    # ...
 ```
 
 ### Interactive Dashboard
@@ -334,6 +511,7 @@ equity-factors/
 │   ├── dashboard.py                # Streamlit dashboard
 │   └── reporting.py                # Report generation
 ├── tests/                          # Unit tests
+│   └── test_pit_universe.py        # PIT QA verification tests
 ├── notebooks/                      # Jupyter notebooks
 ├── pyproject.toml                  # Dependencies
 └── README.md                       # This file
