@@ -661,14 +661,19 @@ def cmd_basket(args):
         _, factor_loadings = pickle.load(f)
     
     # Get factor weights
-    if 'optimal_weights' in opt_results:
+    if isinstance(opt_results, list):
+        # Walk-forward results - average factor weights across all periods
+        print("📊 Averaging factor weights across all walk-forward periods...")
+        import pandas as pd
+        all_weights = [period['factor_weights'] for period in opt_results]
+        weights_df = pd.DataFrame(all_weights)
+        factor_weights = weights_df.mean().to_dict()
+        print(f"   Averaged {len(opt_results)} periods")
+    elif 'optimal_weights' in opt_results:
         factor_weights = opt_results['optimal_weights']
-    elif 'method_allocation' in opt_results:
-        # Walk-forward results
-        print("⚠️  Using last period's weights. Consider averaging across periods.")
-        factor_weights = opt_results[-1]['factor_weights'] if isinstance(opt_results, list) else opt_results['optimal_weights']
     else:
         print("❌ No factor weights found in results file.")
+        print("   Expected 'optimal_weights' key or a list of walk-forward results.")
         sys.exit(1)
     
     print(f"\n📈 Optimal Factor Weights:")
