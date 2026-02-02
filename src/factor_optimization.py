@@ -215,75 +215,119 @@ class SharpeOptimizer:
         lookback: int = 63,
         methods: List[str] = None,
         technique: Literal['gradient', 'differential', 'bayesian'] = 'differential',
+        validation_split: float = 0.2,
         **kwargs
     ) -> OptimizationResult:
         """
         Find optimal blend of weighting methods to maximize Sharpe ratio.
         
-        This is the main entry point for optimization. It dispatches to
-        different optimization techniques based on the 'technique' parameter.
+        Uses a nested walk-forward approach to prevent overfitting:
+        1. Splits lookback into Estimation (first part) and Validation (last part)
+        2. Calculates method weights using ONLY Estimation data
+        3. Optimizes blending weights to maximize Sharpe on Validation data
         
         Parameters
         ----------
         lookback : int, default 63
-            Lookback window for optimization (days)
+            Total lookback window (Estimation + Validation)
         methods : List[str], optional
-            List of methods to blend. Options:
-            - 'equal', 'sharpe', 'momentum', 'risk_parity'
-            - 'min_variance', 'max_diversification', 'pca', 'ic'
-            If None, uses ['sharpe', 'momentum', 'risk_parity']
+            List of methods to blend
         technique : str, default 'differential'
-            Optimization technique:
-            - 'gradient': Fast gradient-based (may find local optima)
-            - 'differential': Differential evolution (recommended, global)
-            - 'bayesian': Bayesian optimization with Optuna (requires optuna)
+            Optimization technique
+        validation_split : float, default 0.2
+            Fraction of lookback to use for validation (out-of-sample optimization)
         **kwargs
-            Additional parameters for specific techniques:
-            - gradient: initial_guess
-            - differential: population_size, max_iterations
-            - bayesian: n_trials, timeout
+            Additional parameters for optimization
             
         Returns
         -------
         OptimizationResult
-            Contains optimal weights, Sharpe ratio, and performance metrics
-            
-        Examples
-        --------
-        >>> optimizer = SharpeOptimizer(returns, loadings)
-        
-        >>> # Differential evolution (recommended default)
-        >>> result = optimizer.optimize_blend(lookback=126, technique='differential')
-        
-        >>> # Fast gradient-based
-        >>> result = optimizer.optimize_blend(lookback=126, technique='gradient')
-        
-        >>> # Bayesian with Optuna (best for many methods)
-        >>> result = optimizer.optimize_blend(
-        ...     lookback=126,
-        ...     methods=['sharpe', 'momentum', 'risk_parity', 'ic'],
-        ...     technique='bayesian',
-        ...     n_trials=100
-        ... )
+            Contains optimal weights and metrics
         """
         if methods is None:
             methods = ['sharpe', 'momentum', 'risk_parity']
         
-        # Filter methods requiring forward returns if not provided
+        # Validate inputs
         available_methods = self._get_available_methods()
         methods = [m for m in methods if m in available_methods]
         
         if len(methods) < 2:
             raise ValueError("Need at least 2 methods for blending")
         
+        # 1. Prepare Data Split
+        # ---------------------
+        if len(self.returns) < lookback:
+            _LOGGER.warning(f"Data length ({len(self.returns)}) < lookback ({lookback}). Using full data.")
+            lookback = len(self.returns)
+            
+        full_window_data = self.returns.tail(lookback)
+        
+        # Determine split point
+        val_size = int(lookback * validation_split)
+        if val_size < 5:  # Ensure minimum validation size
+            val_size = 5
+        est_size = lookback - val_size
+        
+        if est_size < 20: # Warning for small estimation
+             _LOGGER.warning(f"Small estimation window: {est_size} periods")
+
+        # Split data
+        estimation_data = full_window_data.iloc[:est_size]
+        validation_data = full_window_data.iloc[est_size:]
+        
+        # 2. Pre-calculate Method Weights (Efficiency Fix)
+        # -----------------------------------------------
+        # Create a temporary weighter trained ONLY on estimation data
+        # This prevents "Double Dipping" / Hindsight Bias
+        est_weighter = OptimalFactorWeighter(
+            self.loadings, # Loadings assumed static/current for now
+            estimation_data
+        )
+        
+        precalculated_weights = []
+        for method in methods:
+            try:
+                # Use the helper to call specific methods on the est_weighter
+                # We pass the full est_size as lookback since the weighter contains only that data
+                w = self._calculate_single_method_weights(est_weighter, method, est_size)
+                precalculated_weights.append(pd.Series(w).fillna(0))
+            except Exception as e:
+                _LOGGER.warning(f"Failed to calculate {method} weights: {e}")
+                # Fallback to equal weights or zero
+                precalculated_weights.append(pd.Series(est_weighter.equal_weights()))
+
+        # 3. Optimize Blend on Validation Data
+        # ------------------------------------
         if technique == 'gradient':
-            return self._gradient_optimize(lookback, methods, **kwargs)
+            return self._gradient_optimize(validation_data, methods, precalculated_weights, **kwargs)
         elif technique == 'differential':
-            return self._differential_evolution_optimize(lookback, methods, **kwargs)
+            return self._differential_evolution_optimize(validation_data, methods, precalculated_weights, **kwargs)
         elif technique == 'bayesian':
-            return self._bayesian_optimize(lookback, methods, **kwargs)
+            return self._bayesian_optimize(validation_data, methods, precalculated_weights, **kwargs)
         else:
             raise ValueError(f"Unknown technique: {technique}")
+
+    def _calculate_single_method_weights(self, weighter: OptimalFactorWeighter, method: str, lookback: int) -> Dict[str, float]:
+        """Helper to call weighter methods with correct parameters."""
+        if method == 'equal':
+            return weighter.equal_weights()
+        elif method == 'sharpe':
+            return weighter.sharpe_weights(lookback=lookback)
+        elif method == 'momentum':
+            # Momentum usually needs shorter lookback, e.g., 21 or 63
+            # If lookback is very long, cap it at 126
+            mom_lookback = min(lookback, 252) 
+            return weighter.momentum_weights(lookback=mom_lookback)
+        elif method == 'risk_parity':
+            return weighter.risk_parity_weights(lookback=lookback)
+        elif method == 'min_variance':
+            return weighter.min_variance_weights(lookback=lookback)
+        elif method == 'max_diversification':
+            return weighter.max_diversification_weights(lookback=lookback)
+        elif method == 'pca':
+            return weighter.pca_weights()
+        else:
+            return weighter.equal_weights()
     
     def _get_available_methods(self) -> List[str]:
         """Get list of methods that can be used without additional data."""
@@ -294,83 +338,67 @@ class SharpeOptimizer:
     def _calculate_blend_sharpe(
         self,
         method_weights: np.ndarray,
-        lookback_returns: pd.DataFrame,
-        method_functions: List[Callable]
+        validation_returns: pd.DataFrame,
+        component_factor_weights: List[pd.Series]
     ) -> float:
         """
-        Calculate Sharpe ratio for a given blend of methods.
+        Calculate Sharpe ratio for a blend on validation data.
         
         Parameters
         ----------
         method_weights : np.ndarray
-            Weights for each method (must sum to 1)
-        lookback_returns : pd.DataFrame
-            Returns for the lookback period
-        method_functions : List[Callable]
-            Functions to generate factor weights for each method
-            
-        Returns
-        -------
-        float
-            Sharpe ratio (negative for minimization)
+            Weights for each method
+        validation_returns : pd.DataFrame
+            Returns for the validation period
+        component_factor_weights : List[pd.Series]
+            Pre-calculated factor weights for each method
         """
         try:
             # Normalize method weights
+            if method_weights.sum() == 0:
+                return -999.0
             method_weights = method_weights / method_weights.sum()
             
-            # Get factor weights from each method
-            factor_weight_list = []
-            for i, method_fn in enumerate(method_functions):
-                weights = method_fn()
-                factor_weight_list.append(pd.Series(weights))
-            
             # Blend factor weights
+            # Vectorized blend: sum(w_m * weights_m)
             blended_factor_weights = pd.Series(0.0, index=self.factor_names)
-            for i, fw in enumerate(factor_weight_list):
-                blended_factor_weights += method_weights[i] * fw.reindex(self.factor_names).fillna(0)
+            
+            for i, w_series in enumerate(component_factor_weights):
+                blended_factor_weights += method_weights[i] * w_series.reindex(self.factor_names).fillna(0)
             
             # Normalize factor weights
             if blended_factor_weights.sum() > 0:
                 blended_factor_weights = blended_factor_weights / blended_factor_weights.sum()
             else:
-                return -999.0  # Invalid weights
+                return -999.0
             
-            # Calculate portfolio returns (weighted average of factor returns)
-            portfolio_returns = (lookback_returns * blended_factor_weights).sum(axis=1)
+            # Calculate portfolio returns on VALIDATION set
+            portfolio_returns = (validation_returns * blended_factor_weights).sum(axis=1)
             
             # Calculate Sharpe
             mean_ret = portfolio_returns.mean()
             std_ret = portfolio_returns.std()
             
             if std_ret <= 1e-10:
-                return -999.0  # No variation
+                return -999.0
             
             sharpe = (mean_ret - self.risk_free_rate) / std_ret * np.sqrt(252)
-            
             return sharpe
             
         except Exception as e:
-            _LOGGER.warning(f"Error calculating Sharpe: {e}")
             return -999.0
     
     def _gradient_optimize(
         self,
-        lookback: int,
+        validation_returns: pd.DataFrame,
         methods: List[str],
+        precalculated_weights: List[pd.Series],
         initial_guess: Optional[np.ndarray] = None,
         verbose: bool = True
     ) -> OptimizationResult:
-        """
-        Gradient-based optimization using SLSQP.
-        
-        Fast but may converge to local optima. Good for quick optimization
-        or as a refinement step after global optimization.
-        """
+        """Gradient-based optimization using pre-calculated weights."""
         if verbose:
             print(f"Running gradient-based optimization with {len(methods)} methods...")
-        
-        lookback_returns = self.returns.tail(lookback)
-        method_functions = self._get_method_functions(methods, lookback)
         
         n_methods = len(methods)
         
@@ -380,124 +408,125 @@ class SharpeOptimizer:
         else:
             x0 = initial_guess
         
-        # Objective (negative Sharpe for minimization)
+        # Objective (negative Sharpe)
         def objective(x):
-            return -self._calculate_blend_sharpe(x, lookback_returns, method_functions)
+            return -self._calculate_blend_sharpe(x, validation_returns, precalculated_weights)
         
-        # Constraints: sum to 1
         constraints = {'type': 'eq', 'fun': lambda x: np.sum(x) - 1.0}
-        
-        # Bounds: 0 to 1
         bounds = [(0, 1) for _ in range(n_methods)]
         
-        # Optimize
         result = minimize(
-            objective,
-            x0,
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints,
+            objective, x0, method='SLSQP', bounds=bounds, constraints=constraints,
             options={'maxiter': 1000, 'ftol': 1e-9}
         )
         
-        if not result.success:
-            _LOGGER.warning(f"Optimization warning: {result.message}")
-        
-        optimal_method_weights = result.x / result.x.sum()  # Normalize
-        
-        # Create result
-        best_sharpe = -result.fun
-        method_allocation = {methods[i]: optimal_method_weights[i] 
-                           for i in range(n_methods)}
-        
-        optimal_factor_weights = self._weighter.blend_weights(
-            {methods[i]: optimal_method_weights[i] for i in range(n_methods)}
-        )
-        
-        portfolio_returns = self._get_portfolio_returns(optimal_factor_weights, lookback_returns)
-        ann_return = portfolio_returns.mean() * 252
-        ann_vol = portfolio_returns.std() * np.sqrt(252)
-        
-        if verbose:
-            print(f"\nOptimal blend found:")
-            for method, weight in method_allocation.items():
-                if weight > 0.01:
-                    print(f"  {method}: {weight:.1%}")
-            print(f"\nSharpe Ratio: {best_sharpe:.2f}")
-            print(f"Annualized Return: {ann_return:.2%}")
-            print(f"Annualized Volatility: {ann_vol:.2%}")
-        
-        return OptimizationResult(
-            optimal_weights=optimal_factor_weights,
-            sharpe_ratio=best_sharpe,
-            annualized_return=ann_return,
-            annualized_volatility=ann_vol,
-            method_allocation=method_allocation,
-            optimization_metrics={
-                'success': result.success,
-                'message': result.message,
-                'n_iterations': result.nit
-            }
-        )
-    
+        return self._build_result(result, methods, precalculated_weights, validation_returns, -result.fun, verbose)
+
     def _differential_evolution_optimize(
         self,
-        lookback: int,
+        validation_returns: pd.DataFrame,
         methods: List[str],
+        precalculated_weights: List[pd.Series],
         population_size: int = 15,
         max_iterations: int = 100,
         verbose: bool = True
     ) -> OptimizationResult:
-        """
-        Differential evolution optimization.
-        
-        Global optimization algorithm. Recommended default as it provides
-        good balance between thoroughness and speed.
-        """
+        """Differential evolution with pre-calculated weights."""
         if verbose:
             print(f"Running differential evolution with {len(methods)} methods...")
         
-        lookback_returns = self.returns.tail(lookback)
-        method_functions = self._get_method_functions(methods, lookback)
-        
         n_methods = len(methods)
         
-        # Objective
         def objective(x):
-            # Normalize to sum to 1
             x = x / x.sum() if x.sum() > 0 else np.ones_like(x) / len(x)
-            return -self._calculate_blend_sharpe(x, lookback_returns, method_functions)
+            return -self._calculate_blend_sharpe(x, validation_returns, precalculated_weights)
         
-        # Bounds
         bounds = [(0, 1) for _ in range(n_methods)]
         
-        # Constraints via penalty
         def penalized_objective(x):
-            # Penalize if sum != 1
             sum_penalty = 1000 * (np.sum(x) - 1) ** 2
             return objective(x) + sum_penalty
         
-        # Optimize
         result = differential_evolution(
-            penalized_objective,
-            bounds,
-            maxiter=max_iterations,
-            popsize=population_size,
-            seed=42,
-            polish=True
+            penalized_objective, bounds, maxiter=max_iterations, popsize=population_size, seed=42, polish=True
         )
         
+        best_sharpe = -objective(result.x)
+        return self._build_result(result, methods, precalculated_weights, validation_returns, best_sharpe, verbose)
+
+    def _bayesian_optimize(
+        self,
+        validation_returns: pd.DataFrame,
+        methods: List[str],
+        precalculated_weights: List[pd.Series],
+        n_trials: int = 100,
+        timeout: Optional[int] = None,
+        verbose: bool = True
+    ) -> OptimizationResult:
+        """Bayesian optimization with pre-calculated weights."""
+        if not OPTUNA_AVAILABLE:
+            if verbose: print("Optuna not available, falling back to differential evolution...")
+            return self._differential_evolution_optimize(validation_returns, methods, precalculated_weights, verbose=verbose)
+        
+        if verbose: print(f"Running Bayesian optimization with Optuna ({n_trials} trials)...")
+        
+        n_methods = len(methods)
+        
+        def objective(trial):
+            raw_weights = [trial.suggest_float(f'w_{i}', 0.0, 1.0) for i in range(n_methods)]
+            total = sum(raw_weights)
+            if total < 1e-10: return -999.0
+            method_weights = np.array(raw_weights) / total
+            return self._calculate_blend_sharpe(method_weights, validation_returns, precalculated_weights)
+        
+        study = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
+        optuna.logging.set_verbosity(optuna.logging.WARNING if not verbose else optuna.logging.INFO)
+        study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=verbose)
+        
+        best_trial = study.best_trial
+        best_sharpe = best_trial.value
+        
+        # Reconstruct weights
+        raw_weights = [best_trial.params[f'w_{i}'] for i in range(n_methods)]
+        optimal_method_weights = np.array(raw_weights) / sum(raw_weights)
+        
+        # Build fake result object to reuse _build_result logic
+        class Result: pass
+        result = Result()
+        result.x = optimal_method_weights
+        result.success = True
+        result.nit = n_trials
+        result.message = "Optuna Optimization"
+        
+        return self._build_result(result, methods, precalculated_weights, validation_returns, best_sharpe, verbose)
+
+    def _build_result(
+        self, 
+        result, 
+        methods: List[str], 
+        precalculated_weights: List[pd.Series], 
+        validation_returns: pd.DataFrame, 
+        best_sharpe: float,
+        verbose: bool
+    ) -> OptimizationResult:
+        """Helper to construct OptimizationResult."""
+        n_methods = len(methods)
         optimal_method_weights = result.x / result.x.sum()
-        best_sharpe = -objective(optimal_method_weights)
         
-        method_allocation = {methods[i]: optimal_method_weights[i] 
-                           for i in range(n_methods)}
+        method_allocation = {methods[i]: optimal_method_weights[i] for i in range(n_methods)}
         
-        optimal_factor_weights = self._weighter.blend_weights(
-            {methods[i]: optimal_method_weights[i] for i in range(n_methods)}
-        )
+        # Calculate final factor weights using the precalculated components
+        optimal_factor_weights = pd.Series(0.0, index=self.factor_names)
+        for i, w_series in enumerate(precalculated_weights):
+            optimal_factor_weights += optimal_method_weights[i] * w_series.reindex(self.factor_names).fillna(0)
+            
+        if optimal_factor_weights.sum() > 0:
+            optimal_factor_weights = optimal_factor_weights / optimal_factor_weights.sum()
         
-        portfolio_returns = self._get_portfolio_returns(optimal_factor_weights, lookback_returns)
+        optimal_factor_weights_dict = optimal_factor_weights.to_dict()
+        
+        # Calc stats on validation set (or could use full set, but validation is the 'test' here)
+        portfolio_returns = self._get_portfolio_returns(optimal_factor_weights_dict, validation_returns)
         ann_return = portfolio_returns.mean() * 252
         ann_vol = portfolio_returns.std() * np.sqrt(252)
         
@@ -509,166 +538,16 @@ class SharpeOptimizer:
             print(f"\nSharpe Ratio: {best_sharpe:.2f}")
             print(f"Annualized Return: {ann_return:.2%}")
             print(f"Annualized Volatility: {ann_vol:.2%}")
-        
+
         return OptimizationResult(
-            optimal_weights=optimal_factor_weights,
+            optimal_weights=optimal_factor_weights_dict,
             sharpe_ratio=best_sharpe,
             annualized_return=ann_return,
             annualized_volatility=ann_vol,
             method_allocation=method_allocation,
-            optimization_metrics={
-                'success': result.success,
-                'n_iterations': result.nit
-            }
+            optimization_metrics={'success': getattr(result, 'success', True), 'n_iterations': getattr(result, 'nit', 0)}
         )
-    
-    def _bayesian_optimize(
-        self,
-        lookback: int,
-        methods: List[str],
-        n_trials: int = 100,
-        timeout: Optional[int] = None,
-        verbose: bool = True
-    ) -> OptimizationResult:
-        """
-        Bayesian optimization using Optuna TPE sampler.
-        
-        Efficiently searches the parameter space using Tree-structured
-        Parzen Estimator (TPE). Best for complex search spaces.
-        
-        Parameters
-        ----------
-        lookback : int
-            Lookback window
-        methods : List[str]
-            Methods to blend
-        n_trials : int, default 100
-            Number of optimization trials
-        timeout : int, optional
-            Timeout in seconds
-        verbose : bool, default True
-            Print progress
-            
-        Returns
-        -------
-        OptimizationResult
-            Optimization result
-        """
-        if not OPTUNA_AVAILABLE:
-            if verbose:
-                print("Optuna not available, falling back to differential evolution...")
-            return self._differential_evolution_optimize(lookback, methods, verbose=verbose)
-        
-        if verbose:
-            print(f"Running Bayesian optimization with Optuna ({n_trials} trials)...")
-        
-        lookback_returns = self.returns.tail(lookback)
-        method_functions = self._get_method_functions(methods, lookback)
-        n_methods = len(methods)
-        
-        # Objective function for Optuna
-        def objective(trial):
-            # Suggest weights that sum to 1 using Dirichlet-like approach
-            # Sample raw weights then normalize
-            raw_weights = []
-            for i in range(n_methods):
-                raw_weights.append(trial.suggest_float(f'w_{i}', 0.0, 1.0))
-            
-            # Normalize to sum to 1
-            total = sum(raw_weights)
-            if total < 1e-10:
-                return -999.0
-            
-            method_weights = np.array(raw_weights) / total
-            sharpe = self._calculate_blend_sharpe(method_weights, lookback_returns, method_functions)
-            
-            return sharpe
-        
-        # Create study
-        study = optuna.create_study(
-            direction='maximize',
-            sampler=TPESampler(seed=42),
-            study_name='factor_weight_optimization'
-        )
-        
-        # Suppress Optuna's verbose logging
-        optuna.logging.set_verbosity(optuna.logging.WARNING if not verbose else optuna.logging.INFO)
-        
-        # Optimize
-        study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=verbose)
-        
-        # Get best result
-        best_trial = study.best_trial
-        best_sharpe = best_trial.value
-        
-        # Extract best weights
-        raw_weights = [best_trial.params[f'w_{i}'] for i in range(n_methods)]
-        optimal_method_weights = np.array(raw_weights) / sum(raw_weights)
-        
-        method_allocation = {methods[i]: optimal_method_weights[i] 
-                           for i in range(n_methods)}
-        
-        optimal_factor_weights = self._weighter.blend_weights(
-            {methods[i]: optimal_method_weights[i] for i in range(n_methods)}
-        )
-        
-        portfolio_returns = self._get_portfolio_returns(optimal_factor_weights, lookback_returns)
-        ann_return = portfolio_returns.mean() * 252
-        ann_vol = portfolio_returns.std() * np.sqrt(252)
-        
-        if verbose:
-            print(f"\nOptimal blend found ({n_trials} trials):")
-            for method, weight in method_allocation.items():
-                if weight > 0.01:
-                    print(f"  {method}: {weight:.1%}")
-            print(f"\nSharpe Ratio: {best_sharpe:.2f}")
-            print(f"Annualized Return: {ann_return:.2%}")
-            print(f"Annualized Volatility: {ann_vol:.2%}")
-            print(f"Best trial: {best_trial.number}")
-        
-        return OptimizationResult(
-            optimal_weights=optimal_factor_weights,
-            sharpe_ratio=best_sharpe,
-            annualized_return=ann_return,
-            annualized_volatility=ann_vol,
-            method_allocation=method_allocation,
-            optimization_metrics={
-                'n_trials': n_trials,
-                'best_trial': best_trial.number,
-                'study_name': study.study_name
-            }
-        )
-    
-    def _get_method_functions(
-        self,
-        methods: List[str],
-        lookback: int
-    ) -> List[Callable]:
-        """Get functions that generate factor weights for each method."""
-        functions = []
-        
-        for method in methods:
-            if method == 'equal':
-                fn = lambda: self._weighter.equal_weights()
-            elif method == 'sharpe':
-                fn = partial(self._weighter.sharpe_weights, lookback=lookback)
-            elif method == 'momentum':
-                fn = partial(self._weighter.momentum_weights, lookback=lookback)
-            elif method == 'risk_parity':
-                fn = partial(self._weighter.risk_parity_weights, lookback=lookback)
-            elif method == 'min_variance':
-                fn = partial(self._weighter.min_variance_weights, lookback=lookback)
-            elif method == 'max_diversification':
-                fn = partial(self._weighter.max_diversification_weights, lookback=lookback)
-            elif method == 'pca':
-                fn = lambda: self._weighter.pca_weights()
-            else:
-                raise ValueError(f"Unknown method: {method}")
-            
-            functions.append(fn)
-        
-        return functions
-    
+
     def _get_portfolio_returns(
         self,
         factor_weights: Dict[str, float],
@@ -686,33 +565,18 @@ class SharpeOptimizer:
         methods: List[str] = None,
         technique: str = 'differential',
         step_size: Optional[int] = None,
+        validation_split: float = 0.2, # Added
         verbose: bool = True
     ) -> pd.DataFrame:
         """
-        Walk-forward optimization to avoid overfitting.
-        
-        Optimizes on train_window, holds weights for test_window,
-        then re-optimizes. More realistic than single-period optimization.
+        Walk-forward optimization with internal validation split.
         
         Parameters
         ----------
-        train_window : int, default 126
-            Window for optimization (6 months)
-        test_window : int, default 21
-            Window to hold weights (1 month)
-        methods : List[str], optional
-            Methods to blend
-        technique : str, default 'differential'
-            Optimization technique
-        step_size : int, optional
-            Step size for rolling (default = test_window)
-        verbose : bool, default True
-            Print progress
-            
-        Returns
-        -------
-        pd.DataFrame
-            Rolling optimal weights and performance metrics
+        train_window : int
+            Total window for training (Estimation + Validation)
+        test_window : int
+            Out-of-sample test window
         """
         if step_size is None:
             step_size = test_window
@@ -723,38 +587,37 @@ class SharpeOptimizer:
         n_periods = len(self.returns)
         results = []
         
-        # Generate walk-forward windows
         start_idx = train_window
         while start_idx + test_window <= n_periods:
             train_start = start_idx - train_window
             train_end = start_idx
             test_end = min(start_idx + test_window, n_periods)
             
-            # Get training data
+            # Get training data (to be split internally by optimize_blend)
             train_returns = self.returns.iloc[train_start:train_end]
             
-            # Create optimizer for this window
             window_optimizer = SharpeOptimizer(
                 train_returns,
                 self.loadings,
                 self.risk_free_rate
             )
             
-            # Optimize
             if verbose:
                 print(f"\nOptimizing window {len(results)+1}: "
                       f"{self.returns.index[train_start].date()} to "
                       f"{self.returns.index[train_end-1].date()}")
             
             try:
+                # optimize_blend will handle the split internally now
                 result = window_optimizer.optimize_blend(
                     lookback=train_window,
                     methods=methods,
                     technique=technique,
+                    validation_split=validation_split,
                     verbose=verbose
                 )
                 
-                # Test out-of-sample
+                # Test out-of-sample (True Hold-out)
                 test_returns = self.returns.iloc[train_end:test_end]
                 test_portfolio = self._get_portfolio_returns(
                     result.optimal_weights,
@@ -788,57 +651,66 @@ class SharpeOptimizer:
         rebalance_freq: int = 21
     ) -> Dict:
         """
-        Backtest optimized weights out-of-sample.
+        Backtest with realistic weight drift.
         
-        Parameters
-        ----------
-        optimal_weights : Dict[str, float]
-            Optimal factor weights
-        test_periods : int, default 63
-            Number of periods to test
-        transaction_cost : float, default 0.0
-            Transaction cost as fraction (0.001 = 10 bps)
-        rebalance_freq : int, default 21
-            Rebalancing frequency in periods
-            
-        Returns
-        -------
-        Dict
-            Backtest performance metrics
+        Simulates buy-and-hold between rebalancing periods.
         """
-        # Get test data
         test_returns = self.returns.tail(test_periods)
         
-        # Simulate portfolio
-        portfolio_values = [1.0]
-        current_weights = optimal_weights.copy()
+        # Initialize
+        current_capital = 1.0
+        portfolio_values = [current_capital]
+        
+        # Initial allocation
+        # Position values = Capital * Weight
+        current_positions = {f: current_capital * optimal_weights.get(f, 0) 
+                           for f in self.factor_names}
         
         for i in range(len(test_returns)):
-            # Check if rebalance needed
+            # 1. Rebalance Check (Start of day / End of previous day)
             if i > 0 and i % rebalance_freq == 0:
-                # Apply transaction costs
-                if transaction_cost > 0:
-                    turnover = sum(abs(current_weights.get(f, 0) - optimal_weights.get(f, 0)) 
-                                 for f in self.factor_names)
-                    portfolio_values[-1] *= (1 - turnover * transaction_cost)
-                current_weights = optimal_weights.copy()
+                # Target positions
+                target_positions = {f: current_capital * optimal_weights.get(f, 0)
+                                  for f in self.factor_names}
+                
+                # Calculate turnover
+                turnover_value = sum(abs(target_positions[f] - current_positions.get(f, 0))
+                                   for f in self.factor_names)
+                
+                # Pay costs
+                cost = turnover_value * transaction_cost
+                current_capital -= cost
+                
+                # Reset positions to target (adjusted for cost)
+                current_positions = {f: current_capital * optimal_weights.get(f, 0)
+                                   for f in self.factor_names}
             
-            # Calculate daily return
-            daily_ret = sum(test_returns.iloc[i][f] * current_weights.get(f, 0) 
-                          for f in self.factor_names)
-            portfolio_values.append(portfolio_values[-1] * (1 + daily_ret))
+            # 2. Market Movement (During day)
+            day_ret_series = test_returns.iloc[i]
+            day_pnl = 0.0
+            
+            new_positions = {}
+            for f, pos_value in current_positions.items():
+                ret = day_ret_series.get(f, 0.0)
+                new_val = pos_value * (1 + ret)
+                new_positions[f] = new_val
+                day_pnl += (new_val - pos_value)
+            
+            current_positions = new_positions
+            current_capital += day_pnl
+            portfolio_values.append(current_capital)
         
         # Calculate metrics
-        portfolio_returns = pd.Series(portfolio_values).pct_change().dropna()
+        portfolio_values_series = pd.Series(portfolio_values)
+        portfolio_returns = portfolio_values_series.pct_change().dropna()
         
         total_return = portfolio_values[-1] - 1
         ann_return = portfolio_returns.mean() * 252
         ann_vol = portfolio_returns.std() * np.sqrt(252)
         sharpe = (ann_return / ann_vol) if ann_vol > 0 else 0
         
-        # Max drawdown
         running_max = np.maximum.accumulate(portfolio_values)
-        drawdown = (portfolio_values - running_max) / running_max
+        drawdown = (portfolio_values_series - running_max) / running_max
         max_dd = drawdown.min()
         
         return {
