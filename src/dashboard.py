@@ -15,7 +15,8 @@ try:
     from .regime_detection import RegimeDetector
     from .factor_optimization import SharpeOptimizer
     from .factor_weighting import OptimalFactorWeighter
-    from .database import check_database_health, get_database_path
+    from .database import check_database_health, get_database_path, get_db_connection
+    from .config import config
 except ImportError:
     # Absolute imports when PYTHONPATH is set (e.g., via CLI)
     from src.trading_signals import FactorMomentumAnalyzer
@@ -23,7 +24,8 @@ except ImportError:
     from src.regime_detection import RegimeDetector
     from src.factor_optimization import SharpeOptimizer
     from src.factor_weighting import OptimalFactorWeighter
-    from src.database import check_database_health, get_database_path
+    from src.database import check_database_health, get_database_path, get_db_connection
+    from src.config import config
 
 st.set_page_config(page_title="Equity Factors Dashboard", layout="wide")
 
@@ -668,6 +670,377 @@ def create_database_health_panel():
         st.warning(f"Could not check database health: {e}")
 
 
+def create_pit_universe_panel():
+    """Create Point-in-Time (PIT) Universe Construction panel."""
+    st.header("⏰ Point-in-Time (PIT) Universe Construction")
+    
+    st.markdown("""
+    **Eliminate survivorship bias from backtesting by reconstructing true historical market state.**
+    
+    Unlike `get_etf_holdings()` which projects current constituents into the past, 
+    PIT uses Alpha Vantage LISTING_STATUS to include delisted stocks like Lehman Brothers (LEH) 
+    and Silicon Valley Bank (SIVB).
+    """)
+    
+    # Check if PIT table exists
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historical_universes'")
+            pit_exists = cursor.fetchone() is not None
+            
+            if pit_exists:
+                cursor.execute("SELECT COUNT(DISTINCT date) as num_dates, COUNT(*) as total_records FROM historical_universes")
+                pit_stats = cursor.fetchone()
+                num_dates, total_records = pit_stats
+            else:
+                num_dates, total_records = 0, 0
+    except Exception as e:
+        st.error(f"Could not check PIT table: {e}")
+        pit_exists = False
+        num_dates, total_records = 0, 0
+    
+    # PIT Stats
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("PIT Table Exists", "✅ Yes" if pit_exists else "❌ No")
+    with col2:
+        st.metric("Stored Universe Dates", num_dates)
+    with col3:
+        st.metric("Total Records", f"{total_records:,}")
+    
+    # Tabs for different PIT functions
+    pit_tab1, pit_tab2, pit_tab3 = st.tabs(["Build Universe", "View Universe", "QA Verification"])
+    
+    # Tab 1: Build Universe
+    with pit_tab1:
+        st.subheader("Build PIT Universe")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            pit_date = st.date_input(
+                "Target Date",
+                value=pd.Timestamp("2023-01-01"),
+                min_value=pd.Timestamp("2000-01-01"),
+                max_value=pd.Timestamp.now(),
+                help="The historical date to reconstruct"
+            )
+        with col2:
+            pit_top_n = st.number_input(
+                "Top N Stocks",
+                min_value=100,
+                max_value=5000,
+                value=500,
+                step=100,
+                help="Number of stocks by dollar volume"
+            )
+        with col3:
+            pit_exchanges = st.multiselect(
+                "Exchanges",
+                options=["NYSE", "NASDAQ", "AMEX"],
+                default=["NYSE", "NASDAQ"],
+                help="Filter by exchange (reduces API calls)"
+            )
+        
+        skip_delisted = st.checkbox(
+            "Skip Delisted (Faster, Less Accurate)",
+            value=False,
+            help="Only fetch active listings (not recommended for backtesting)"
+        )
+        
+        if st.button("🔨 Build PIT Universe", type="primary"):
+            api_key = config.ALPHAVANTAGE_API_KEY
+            if not api_key:
+                st.error("❌ ALPHAVANTAGE_API_KEY not configured. Set it in .env file.")
+            else:
+                try:
+                    with st.spinner("Initializing DataBackend..."):
+                        try:
+                            from .alphavantage_system import DataBackend
+                        except ImportError:
+                            from src.alphavantage_system import DataBackend
+                        
+                        backend = DataBackend(api_key)
+                    
+                    with st.spinner(f"Building PIT universe for {pit_date}... This may take several minutes."):
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        status_text.text("Fetching listing status from Alpha Vantage...")
+                        progress_bar.progress(10)
+                        
+                        universe_df = backend.build_point_in_time_universe(
+                            date_str=pit_date.strftime('%Y-%m-%d'),
+                            top_n=pit_top_n,
+                            exchanges=pit_exchanges if pit_exchanges else None,
+                            skip_delisted=skip_delisted
+                        )
+                        
+                        progress_bar.progress(100)
+                        status_text.text("Complete!")
+                        
+                        if not universe_df.empty:
+                            st.success(f"✅ Built PIT universe: {len(universe_df)} stocks")
+                            
+                            # Show summary stats
+                            active_count = (universe_df['status'] == 'Active').sum()
+                            delisted_count = (universe_df['status'] == 'Delisted').sum()
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Total Stocks", len(universe_df))
+                            with col2:
+                                st.metric("Active", active_count)
+                            with col3:
+                                st.metric("Delisted", delisted_count)
+                            
+                            # Show top stocks
+                            st.subheader("Top 20 Stocks by Dollar Volume")
+                            st.dataframe(
+                                universe_df.head(20)[['ticker', 'status', 'dollar_volume', 'exchange']].style.format({
+                                    'dollar_volume': '{:,.0f}'
+                                }),
+                                width='stretch'
+                            )
+                            
+                            # Show delisted stocks if any
+                            if delisted_count > 0:
+                                st.subheader("Delisted Stocks in Universe")
+                                delisted_df = universe_df[universe_df['status'] == 'Delisted']
+                                st.dataframe(
+                                    delisted_df[['ticker', 'dollar_volume', 'exchange']].style.format({
+                                        'dollar_volume': '{:,.0f}'
+                                    }),
+                                    width='stretch'
+                                )
+                            
+                            # Export option
+                            csv = universe_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Download Universe as CSV",
+                                data=csv,
+                                file_name=f"pit_universe_{pit_date.strftime('%Y%m%d')}.csv",
+                                mime="text/csv"
+                            )
+                        else:
+                            st.error("❌ Failed to build universe. Check API key and try again.")
+                            
+                except Exception as e:
+                    st.error(f"Error building PIT universe: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+    
+    # Tab 2: View Universe
+    with pit_tab2:
+        st.subheader("View Stored PIT Universe")
+        
+        try:
+            # Get available dates
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT DISTINCT date FROM historical_universes ORDER BY date DESC LIMIT 100"
+                )
+                available_dates = [row[0] for row in cursor.fetchall()]
+            
+            if not available_dates:
+                st.info("No PIT universes found. Build one in the 'Build Universe' tab.")
+            else:
+                view_date = st.selectbox(
+                    "Select Universe Date",
+                    options=available_dates,
+                    format_func=lambda x: f"{x} ({len([d for d in available_dates if d == x])} records)"
+                )
+                
+                view_top_n = st.slider("Show Top N", 10, 1000, 100)
+                
+                if st.button("🔍 View Universe"):
+                    with get_db_connection() as conn:
+                        query = """
+                            SELECT ticker, asset_type, status, dollar_volume
+                            FROM historical_universes
+                            WHERE date = ?
+                            ORDER BY dollar_volume DESC
+                            LIMIT ?
+                        """
+                        view_df = pd.read_sql(query, conn, params=(view_date, view_top_n))
+                    
+                    if not view_df.empty:
+                        st.success(f"Showing top {len(view_df)} stocks from {view_date}")
+                        
+                        # Stats
+                        active_count = (view_df['status'] == 'Active').sum()
+                        delisted_count = (view_df['status'] == 'Delisted').sum()
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total", len(view_df))
+                        with col2:
+                            st.metric("Active", active_count, f"{active_count/len(view_df)*100:.1f}%")
+                        with col3:
+                            st.metric("Delisted", delisted_count, f"{delisted_count/len(view_df)*100:.1f}%")
+                        
+                        # Display with color coding
+                        def color_status(val):
+                            if val == 'Delisted':
+                                return 'background-color: #ffcccc; color: #990000'
+                            elif val == 'Active':
+                                return 'background-color: #ccffcc; color: #006600'
+                            return ''
+                        
+                        styled_df = view_df.style.applymap(
+                            color_status, subset=['status']
+                        ).format({
+                            'dollar_volume': '{:,.0f}'
+                        })
+                        
+                        st.dataframe(styled_df, width='stretch')
+                        
+                        # Show known delisted tickers
+                        known_delisted = {'LEH', 'SIVB', 'FRC', 'WAMU', 'WB', 'WM', 'BEAR', 'BS'}
+                        found_delisted = known_delisted.intersection(set(view_df['ticker'].tolist()))
+                        
+                        if found_delisted:
+                            st.success(f"✅ PIT Universe includes known delisted tickers: {', '.join(found_delisted)}")
+                        elif delisted_count > 0:
+                            st.info(f"ℹ️ Delisted stocks present but no famous bankruptcies found in top {view_top_n}")
+                    else:
+                        st.warning(f"No data found for {view_date}")
+                        
+        except Exception as e:
+            st.error(f"Error viewing universe: {e}")
+    
+    # Tab 3: QA Verification
+    with pit_tab3:
+        st.subheader("QA Verification Tests")
+        
+        st.markdown("""
+        **Critical QA Tests** (must pass before live capital deployment):
+        
+        1. **Lehman Brothers (LEH)** - Should be in 2008-09-15 universe
+        2. **Silicon Valley Bank (SIVB)** - Should be in 2023-01-01 universe
+        
+        If these tests fail, the system suffers from **survivorship bias**.
+        """)
+        
+        qa_col1, qa_col2 = st.columns(2)
+        
+        with qa_col1:
+            st.markdown("**Test 1: Lehman Brothers**")
+            st.caption("Date: 2008-09-15 (Bankruptcy)")
+            
+            if st.button("🧪 Run LEH Test"):
+                api_key = config.ALPHAVANTAGE_API_KEY
+                if not api_key:
+                    st.error("ALPHAVANTAGE_API_KEY not configured")
+                else:
+                    with st.spinner("Testing LEH inclusion..."):
+                        try:
+                            try:
+                                from .research import FactorResearchSystem
+                            except ImportError:
+                                from src.research import FactorResearchSystem
+                            
+                            frs = FactorResearchSystem(api_key, universe=["SPY"])
+                            result = frs.verify_pit_universe('2008-09-15', ['LEH'])
+                            
+                            if result['pass']:
+                                st.success(f"✅ PASS: LEH found in universe ({result['universe_size']} total stocks)")
+                            else:
+                                st.error(f"❌ FAIL: LEH missing! Found: {result['found']}, Missing: {result['missing']}")
+                                st.warning("⚠️ Survivorship bias detected - do not deploy to live capital!")
+                        except Exception as e:
+                            st.error(f"Test error: {e}")
+        
+        with qa_col2:
+            st.markdown("**Test 2: Silicon Valley Bank**")
+            st.caption("Date: 2023-01-01 (Pre-failure)")
+            
+            if st.button("🧪 Run SIVB Test"):
+                api_key = config.ALPHAVANTAGE_API_KEY
+                if not api_key:
+                    st.error("ALPHAVANTAGE_API_KEY not configured")
+                else:
+                    with st.spinner("Testing SIVB inclusion..."):
+                        try:
+                            try:
+                                from .research import FactorResearchSystem
+                            except ImportError:
+                                from src.research import FactorResearchSystem
+                            
+                            frs = FactorResearchSystem(api_key, universe=["SPY"])
+                            result = frs.verify_pit_universe('2023-01-01', ['SIVB'])
+                            
+                            if result['pass']:
+                                st.success(f"✅ PASS: SIVB found in universe ({result['universe_size']} total stocks)")
+                            else:
+                                st.error(f"❌ FAIL: SIVB missing! Found: {result['found']}, Missing: {result['missing']}")
+                                st.warning("⚠️ Survivorship bias detected - do not deploy to live capital!")
+                        except Exception as e:
+                            st.error(f"Test error: {e}")
+        
+        # Quick check section
+        st.divider()
+        st.subheader("Quick Ticker Check")
+        
+        quick_date = st.date_input(
+            "Check Date",
+            value=pd.Timestamp("2008-09-15"),
+            key="quick_check_date"
+        )
+        quick_tickers = st.text_input(
+            "Tickers to Check (comma-separated)",
+            value="LEH, SIVB, FRC",
+            help="Enter ticker symbols to verify presence in the universe"
+        )
+        
+        if st.button("🔍 Check Tickers"):
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT ticker, status, dollar_volume FROM historical_universes WHERE date = ?",
+                        (quick_date.strftime('%Y-%m-%d'),)
+                    )
+                    universe_tickers = {row[0]: {'status': row[1], 'dv': row[2]} for row in cursor.fetchall()}
+                
+                if not universe_tickers:
+                    st.warning(f"No universe found for {quick_date}. Build it first.")
+                else:
+                    check_list = [t.strip().upper() for t in quick_tickers.split(',')]
+                    
+                    results = []
+                    for ticker in check_list:
+                        if ticker in universe_tickers:
+                            info = universe_tickers[ticker]
+                            results.append({
+                                'Ticker': ticker,
+                                'Present': '✅ Yes',
+                                'Status': info['status'],
+                                'Dollar Volume': f"{info['dv']:,.0f}"
+                            })
+                        else:
+                            results.append({
+                                'Ticker': ticker,
+                                'Present': '❌ No',
+                                'Status': 'N/A',
+                                'Dollar Volume': 'N/A'
+                            })
+                    
+                    results_df = pd.DataFrame(results)
+                    st.dataframe(results_df, width='stretch')
+                    
+                    # Summary
+                    present_count = sum(1 for r in results if r['Present'] == '✅ Yes')
+                    if present_count == len(results):
+                        st.success(f"All {len(results)} tickers found!")
+                    else:
+                        st.info(f"{present_count}/{len(results)} tickers found")
+                        
+            except Exception as e:
+                st.error(f"Check error: {e}")
+
+
 def main():
     st.title("📊 Equity Factors Research Dashboard")
 
@@ -853,6 +1226,10 @@ def main():
         except Exception as e:
             st.warning(f"Regime analysis not available: {e}")
     
+    # --- PIT Universe Section ---
+    st.divider()
+    create_pit_universe_panel()
+    
     # --- Database Health Section (Sidebar) ---
     st.sidebar.divider()
     with st.sidebar.expander("🗄️ Database Health"):
@@ -865,6 +1242,33 @@ def main():
                 st.write("**Errors:**")
                 for err in health['errors']:
                     st.write(f"- {err}")
+        except Exception as e:
+            st.write(f"⚠️ Could not check: {e}")
+    
+    # PIT Quick Stats in Sidebar
+    with st.sidebar.expander("⏰ PIT Universe Status"):
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='historical_universes'"
+                )
+                if cursor.fetchone():
+                    cursor.execute(
+                        "SELECT COUNT(DISTINCT date), COUNT(*) FROM historical_universes"
+                    )
+                    num_dates, total = cursor.fetchone()
+                    st.write(f"**Stored Dates:** {num_dates}")
+                    st.write(f"**Total Records:** {total:,}")
+                    
+                    cursor.execute(
+                        "SELECT MAX(date) FROM historical_universes"
+                    )
+                    latest = cursor.fetchone()[0]
+                    if latest:
+                        st.write(f"**Latest:** {latest}")
+                else:
+                    st.write("⚠️ PIT table not initialized")
         except Exception as e:
             st.write(f"⚠️ Could not check: {e}")
 
