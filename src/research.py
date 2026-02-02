@@ -1199,6 +1199,13 @@ class FactorResearchSystem(DataBackend):
 
     # ---------- statistical engines ---------- #
     def _rolling_stat_model(self, rets: pd.DataFrame):
+        """
+        Rolling statistical factor model with correct factor return calculation.
+        
+        Fits decomposition on standardized rolling window but calculates factor
+        returns in original return space (not standardized space) to ensure
+        factor returns represent actual tradable portfolio returns.
+        """
         scaler = StandardScaler()
         if self.method == "pca":
             decomp = PCA(self.k)
@@ -1214,15 +1221,25 @@ class FactorResearchSystem(DataBackend):
         fac_rets, loads, dates = [], [], []
         for t in range(self.roll, len(rets)):
             win = rets.iloc[t-self.roll:t]
+            # Standardize for stable decomposition fitting
             z = scaler.fit_transform(win.values)
             decomp.fit(z)
+            
+            # Get loadings (components transposed: stocks × factors)
             load = pd.DataFrame(
                 decomp.components_.T, index=rets.columns,
                 columns=[f"F{i+1}" for i in range(self.k)]
             )
-            today = (rets.iloc[[t]].values - scaler.mean_) / scaler.scale_
-            fac_rets.append((today @ decomp.components_.T).ravel())
-            loads.append(load); dates.append(rets.index[t])
+            
+            # Calculate factor returns in ORIGINAL return space (not standardized)
+            # Factor return = weighted average of stock returns, where weights are loadings
+            today_rets = rets.iloc[t]
+            # For each factor, calculate return of portfolio weighted by loadings
+            factor_ret = today_rets.values @ load.values
+            
+            fac_rets.append(factor_ret)
+            loads.append(load)
+            dates.append(rets.index[t])
 
         f_df = pd.DataFrame(fac_rets, index=dates,
                             columns=[f"F{i+1}" for i in range(self.k)])
