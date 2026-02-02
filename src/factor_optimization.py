@@ -12,9 +12,9 @@ The strategy can be used for:
 
 Available Optimization Methods
 ------------------------------
-1. **Grid Search** - Exhaustive search over weight combinations
-2. **Gradient Ascent** - Efficient optimization using gradients
-3. **Bayesian Optimization** - Smart search using Gaussian Processes
+1. **Gradient Ascent** - Efficient optimization using gradients
+2. **Differential Evolution** - Global optimization using evolutionary algorithm
+3. **Bayesian Optimization (Optuna)** - Smart search using TPE sampler
 4. **Risk-Adjusted Optimization** - Maximize Sharpe with risk constraints
 
 Usage
@@ -44,9 +44,9 @@ Usage
 
 from __future__ import annotations
 import logging
+import warnings
 from typing import Dict, List, Optional, Tuple, Callable, Literal
 from dataclasses import dataclass
-from itertools import product
 from functools import partial
 
 import numpy as np
@@ -56,6 +56,16 @@ from scipy.optimize import minimize, differential_evolution
 from .factor_weighting import OptimalFactorWeighter, WeightingMethod
 
 _LOGGER = logging.getLogger(__name__)
+
+# Optuna is optional - only needed for Bayesian optimization
+try:
+    import optuna
+    from optuna.samplers import TPESampler
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    OPTUNA_AVAILABLE = False
+    warnings.warn("Optuna not installed. Bayesian optimization will use differential evolution fallback. "
+                  "Install with: uv add optuna")
 
 
 @dataclass
@@ -103,18 +113,16 @@ class SharpeOptimizer:
     
     Methods
     -------
-    optimize_blend(lookback, methods, technique='grid')
+    optimize_blend(lookback, methods, technique='differential')
         Find optimal blend of weighting methods
     walk_forward_optimize(train_window, test_window, methods)
         Rolling window optimization
-    grid_search_optimize(lookback, methods, grid_points=5)
-        Exhaustive grid search over weight combinations
     gradient_optimize(lookback, methods, initial_guess=None)
         Gradient-based optimization
-    bayesian_optimize(lookback, methods, n_iterations=50)
-        Bayesian optimization with Gaussian Processes
-    max_sharpe_with_constraints(lookback, methods, max_volatility=None)
-        Maximize Sharpe with optional volatility constraint
+    bayesian_optimize(lookback, methods, n_trials=100)
+        Bayesian optimization with Optuna TPE sampler
+    differential_evolution_optimize(lookback, methods)
+        Differential evolution global optimization
     backtest_optimal_weights(optimal_weights, test_periods)
         Test optimized weights out-of-sample
     
@@ -144,14 +152,22 @@ class SharpeOptimizer:
     >>> # Initialize
     >>> optimizer = SharpeOptimizer(factor_returns, factor_loadings)
     
-    >>> # Simple grid search optimization
+    >>> # Differential evolution (recommended)
     >>> result = optimizer.optimize_blend(
     ...     lookback=126,
     ...     methods=['sharpe', 'momentum', 'risk_parity'],
-    ...     technique='grid'
+    ...     technique='differential'
     ... )
     >>> print(f"Optimal blend: {result.method_allocation}")
     >>> print(f"Sharpe ratio: {result.sharpe_ratio:.2f}")
+    
+    >>> # Bayesian optimization with Optuna (if installed)
+    >>> result = optimizer.optimize_blend(
+    ...     lookback=126,
+    ...     methods=['sharpe', 'momentum', 'risk_parity', 'ic'],
+    ...     technique='bayesian',
+    ...     n_trials=100
+    ... )
     
     >>> # Walk-forward optimization
     >>> rolling = optimizer.walk_forward_optimize(
@@ -162,13 +178,6 @@ class SharpeOptimizer:
     >>> 
     >>> # Plot rolling weights
     >>> rolling['method_weights'].plot()
-    
-    >>> # Backtest with transaction costs
-    >>> perf = optimizer.backtest_optimal_weights(
-    ...     result.optimal_weights,
-    ...     test_periods=126,
-    ...     transaction_cost=0.001
-    ... )
     """
     
     def __init__(
@@ -205,7 +214,7 @@ class SharpeOptimizer:
         self,
         lookback: int = 63,
         methods: List[str] = None,
-        technique: Literal['grid', 'gradient', 'bayesian', 'differential'] = 'grid',
+        technique: Literal['gradient', 'differential', 'bayesian'] = 'differential',
         **kwargs
     ) -> OptimizationResult:
         """
@@ -223,14 +232,16 @@ class SharpeOptimizer:
             - 'equal', 'sharpe', 'momentum', 'risk_parity'
             - 'min_variance', 'max_diversification', 'pca', 'ic'
             If None, uses ['sharpe', 'momentum', 'risk_parity']
-        technique : str, default 'grid'
+        technique : str, default 'differential'
             Optimization technique:
-            - 'grid': Exhaustive grid search (exact but slower)
-            - 'gradient': Gradient-based (faster, may find local optima)
-            - 'bayesian': Bayesian optimization (best for complex spaces)
-            - 'differential': Differential evolution (good balance)
+            - 'gradient': Fast gradient-based (may find local optima)
+            - 'differential': Differential evolution (recommended, global)
+            - 'bayesian': Bayesian optimization with Optuna (requires optuna)
         **kwargs
-            Additional parameters for specific techniques
+            Additional parameters for specific techniques:
+            - gradient: initial_guess
+            - differential: population_size, max_iterations
+            - bayesian: n_trials, timeout
             
         Returns
         -------
@@ -241,18 +252,18 @@ class SharpeOptimizer:
         --------
         >>> optimizer = SharpeOptimizer(returns, loadings)
         
-        >>> # Grid search (most thorough)
-        >>> result = optimizer.optimize_blend(lookback=126, technique='grid')
+        >>> # Differential evolution (recommended default)
+        >>> result = optimizer.optimize_blend(lookback=126, technique='differential')
         
         >>> # Fast gradient-based
         >>> result = optimizer.optimize_blend(lookback=126, technique='gradient')
         
-        >>> # Bayesian (best for many methods)
+        >>> # Bayesian with Optuna (best for many methods)
         >>> result = optimizer.optimize_blend(
         ...     lookback=126,
         ...     methods=['sharpe', 'momentum', 'risk_parity', 'ic'],
         ...     technique='bayesian',
-        ...     n_iterations=100
+        ...     n_trials=100
         ... )
         """
         if methods is None:
@@ -265,14 +276,12 @@ class SharpeOptimizer:
         if len(methods) < 2:
             raise ValueError("Need at least 2 methods for blending")
         
-        if technique == 'grid':
-            return self._grid_search_optimize(lookback, methods, **kwargs)
-        elif technique == 'gradient':
+        if technique == 'gradient':
             return self._gradient_optimize(lookback, methods, **kwargs)
-        elif technique == 'bayesian':
-            return self._bayesian_optimize(lookback, methods, **kwargs)
         elif technique == 'differential':
             return self._differential_evolution_optimize(lookback, methods, **kwargs)
+        elif technique == 'bayesian':
+            return self._bayesian_optimize(lookback, methods, **kwargs)
         else:
             raise ValueError(f"Unknown technique: {technique}")
     
@@ -344,139 +353,6 @@ class SharpeOptimizer:
             _LOGGER.warning(f"Error calculating Sharpe: {e}")
             return -999.0
     
-    def _grid_search_optimize(
-        self,
-        lookback: int,
-        methods: List[str],
-        grid_points: int = 5,
-        verbose: bool = True
-    ) -> OptimizationResult:
-        """
-        Exhaustive grid search over weight combinations.
-        
-        Most thorough but computationally expensive for many methods.
-        With M methods and G grid points: G^(M-1) evaluations.
-        """
-        if verbose:
-            print(f"Running grid search with {len(methods)} methods, {grid_points} points each...")
-        
-        # Get lookback returns
-        lookback_returns = self.returns.tail(lookback)
-        
-        # Generate method weight functions
-        method_functions = self._get_method_functions(methods, lookback)
-        
-        # Generate grid
-        # For M methods, we need M-1 dimensions (last is 1 - sum(others))
-        n_methods = len(methods)
-        grid_values = np.linspace(0, 1, grid_points)
-        
-        best_sharpe = -np.inf
-        best_weights = None
-        results = []
-        
-        # Generate all combinations that sum to <= 1
-        # Use simplex sampling
-        from itertools import combinations_with_replacement
-        
-        def generate_simplex_grid(n_dims, n_points):
-            """Generate points on simplex (sum to 1)."""
-            if n_dims == 2:
-                # 2D simplex: line from (0,1) to (1,0)
-                w1 = np.linspace(0, 1, n_points)
-                return [[w, 1-w] for w in w1]
-            elif n_dims == 3:
-                # 3D simplex: triangle
-                points = []
-                for i in range(n_points):
-                    for j in range(n_points - i):
-                        w1 = i / (n_points - 1)
-                        w2 = j / (n_points - 1)
-                        w3 = 1 - w1 - w2
-                        if w3 >= 0:
-                            points.append([w1, w2, w3])
-                return points
-            elif n_dims == 4:
-                # 4D simplex: tetrahedron
-                points = []
-                step = 1 / (n_points - 1)
-                for i in range(n_points):
-                    for j in range(n_points - i):
-                        for k in range(n_points - i - j):
-                            w1 = i * step
-                            w2 = j * step
-                            w3 = k * step
-                            w4 = 1 - w1 - w2 - w3
-                            if w4 >= -1e-10:
-                                points.append([w1, w2, w3, max(0, w4)])
-                return points
-            else:
-                # For higher dimensions, use random sampling
-                np.random.seed(42)
-                points = []
-                for _ in range(n_points ** 2):
-                    w = np.random.dirichlet(np.ones(n_dims))
-                    points.append(w.tolist())
-                return points
-        
-        weight_combinations = generate_simplex_grid(n_methods, grid_points)
-        
-        if verbose:
-            print(f"Testing {len(weight_combinations)} weight combinations...")
-        
-        for w_combo in weight_combinations:
-            method_weights = np.array(w_combo)
-            sharpe = self._calculate_blend_sharpe(
-                method_weights, lookback_returns, method_functions
-            )
-            
-            results.append({
-                'weights': method_weights,
-                'sharpe': sharpe
-            })
-            
-            if sharpe > best_sharpe:
-                best_sharpe = sharpe
-                best_weights = method_weights.copy()
-        
-        if best_weights is None:
-            raise RuntimeError("Optimization failed to find valid weights")
-        
-        # Create result
-        method_allocation = {methods[i]: best_weights[i] for i in range(n_methods)}
-        
-        # Get optimal factor weights
-        optimal_factor_weights = self._weighter.blend_weights(
-            {methods[i]: best_weights[i] for i in range(n_methods)}
-        )
-        
-        # Calculate additional metrics
-        portfolio_returns = self._get_portfolio_returns(optimal_factor_weights, lookback_returns)
-        ann_return = portfolio_returns.mean() * 252
-        ann_vol = portfolio_returns.std() * np.sqrt(252)
-        
-        if verbose:
-            print(f"\nOptimal blend found:")
-            for method, weight in method_allocation.items():
-                if weight > 0.01:
-                    print(f"  {method}: {weight:.1%}")
-            print(f"\nSharpe Ratio: {best_sharpe:.2f}")
-            print(f"Annualized Return: {ann_return:.2%}")
-            print(f"Annualized Volatility: {ann_vol:.2%}")
-        
-        return OptimizationResult(
-            optimal_weights=optimal_factor_weights,
-            sharpe_ratio=best_sharpe,
-            annualized_return=ann_return,
-            annualized_volatility=ann_vol,
-            method_allocation=method_allocation,
-            optimization_metrics={
-                'grid_points': grid_points,
-                'combinations_tested': len(weight_combinations),
-                'all_results': results
-            }
-        )
-    
     def _gradient_optimize(
         self,
         lookback: int,
@@ -487,7 +363,8 @@ class SharpeOptimizer:
         """
         Gradient-based optimization using SLSQP.
         
-        Faster than grid search but may converge to local optima.
+        Fast but may converge to local optima. Good for quick optimization
+        or as a refinement step after global optimization.
         """
         if verbose:
             print(f"Running gradient-based optimization with {len(methods)} methods...")
@@ -574,7 +451,8 @@ class SharpeOptimizer:
         """
         Differential evolution optimization.
         
-        Good balance between thoroughness and speed. Global optimization.
+        Global optimization algorithm. Recommended default as it provides
+        good balance between thoroughness and speed.
         """
         if verbose:
             print(f"Running differential evolution with {len(methods)} methods...")
@@ -587,7 +465,7 @@ class SharpeOptimizer:
         # Objective
         def objective(x):
             # Normalize to sum to 1
-            x = x / x.sum()
+            x = x / x.sum() if x.sum() > 0 else np.ones_like(x) / len(x)
             return -self._calculate_blend_sharpe(x, lookback_returns, method_functions)
         
         # Bounds
@@ -648,50 +526,84 @@ class SharpeOptimizer:
         self,
         lookback: int,
         methods: List[str],
-        n_iterations: int = 50,
+        n_trials: int = 100,
+        timeout: Optional[int] = None,
         verbose: bool = True
     ) -> OptimizationResult:
         """
-        Bayesian optimization using scikit-optimize.
+        Bayesian optimization using Optuna TPE sampler.
         
-        Best for complex search spaces. Requires scikit-optimize.
+        Efficiently searches the parameter space using Tree-structured
+        Parzen Estimator (TPE). Best for complex search spaces.
+        
+        Parameters
+        ----------
+        lookback : int
+            Lookback window
+        methods : List[str]
+            Methods to blend
+        n_trials : int, default 100
+            Number of optimization trials
+        timeout : int, optional
+            Timeout in seconds
+        verbose : bool, default True
+            Print progress
+            
+        Returns
+        -------
+        OptimizationResult
+            Optimization result
         """
-        try:
-            from skopt import gp_minimize
-            from skopt.space import Real
-        except ImportError:
-            _LOGGER.warning("scikit-optimize not installed, falling back to differential evolution")
+        if not OPTUNA_AVAILABLE:
+            if verbose:
+                print("Optuna not available, falling back to differential evolution...")
             return self._differential_evolution_optimize(lookback, methods, verbose=verbose)
         
         if verbose:
-            print(f"Running Bayesian optimization with {len(methods)} methods...")
+            print(f"Running Bayesian optimization with Optuna ({n_trials} trials)...")
         
         lookback_returns = self.returns.tail(lookback)
         method_functions = self._get_method_functions(methods, lookback)
-        
         n_methods = len(methods)
         
-        # Objective
-        def objective(x):
-            x = np.array(x)
-            x = x / x.sum()  # Normalize
-            return -self._calculate_blend_sharpe(x, lookback_returns, method_functions)
+        # Objective function for Optuna
+        def objective(trial):
+            # Suggest weights that sum to 1 using Dirichlet-like approach
+            # Sample raw weights then normalize
+            raw_weights = []
+            for i in range(n_methods):
+                raw_weights.append(trial.suggest_float(f'w_{i}', 0.0, 1.0))
+            
+            # Normalize to sum to 1
+            total = sum(raw_weights)
+            if total < 1e-10:
+                return -999.0
+            
+            method_weights = np.array(raw_weights) / total
+            sharpe = self._calculate_blend_sharpe(method_weights, lookback_returns, method_functions)
+            
+            return sharpe
         
-        # Search space
-        space = [Real(0, 1, name=f'w_{i}') for i in range(n_methods)]
-        
-        # Optimize
-        result = gp_minimize(
-            objective,
-            space,
-            n_calls=n_iterations,
-            n_random_starts=10,
-            random_state=42,
-            verbose=verbose
+        # Create study
+        study = optuna.create_study(
+            direction='maximize',
+            sampler=TPESampler(seed=42),
+            study_name='factor_weight_optimization'
         )
         
-        optimal_method_weights = np.array(result.x) / np.sum(result.x)
-        best_sharpe = -result.fun
+        # Suppress Optuna's verbose logging
+        optuna.logging.set_verbosity(optuna.logging.WARNING if not verbose else optuna.logging.INFO)
+        
+        # Optimize
+        study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=verbose)
+        
+        # Get best result
+        best_trial = study.best_trial
+        best_sharpe = best_trial.value
+        
+        # Extract best weights
+        raw_weights = [best_trial.params[f'w_{i}'] for i in range(n_methods)]
+        optimal_method_weights = np.array(raw_weights) / sum(raw_weights)
         
         method_allocation = {methods[i]: optimal_method_weights[i] 
                            for i in range(n_methods)}
@@ -704,12 +616,27 @@ class SharpeOptimizer:
         ann_return = portfolio_returns.mean() * 252
         ann_vol = portfolio_returns.std() * np.sqrt(252)
         
+        if verbose:
+            print(f"\nOptimal blend found ({n_trials} trials):")
+            for method, weight in method_allocation.items():
+                if weight > 0.01:
+                    print(f"  {method}: {weight:.1%}")
+            print(f"\nSharpe Ratio: {best_sharpe:.2f}")
+            print(f"Annualized Return: {ann_return:.2%}")
+            print(f"Annualized Volatility: {ann_vol:.2%}")
+            print(f"Best trial: {best_trial.number}")
+        
         return OptimizationResult(
             optimal_weights=optimal_factor_weights,
             sharpe_ratio=best_sharpe,
             annualized_return=ann_return,
             annualized_volatility=ann_vol,
-            method_allocation=method_allocation
+            method_allocation=method_allocation,
+            optimization_metrics={
+                'n_trials': n_trials,
+                'best_trial': best_trial.number,
+                'study_name': study.study_name
+            }
         )
     
     def _get_method_functions(

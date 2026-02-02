@@ -49,6 +49,11 @@ dev = [
     "litellm>=1.81.6",
 ]
 
+[project.optional-dependencies]
+optimization = [
+    "optuna>=4.0.0",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

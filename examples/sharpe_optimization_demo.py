@@ -122,21 +122,8 @@ def main():
     methods = ['sharpe', 'momentum', 'risk_parity']
     lookback = 126
     
-    # Grid Search
-    print("\n3a. Grid Search Optimization (most thorough)...")
-    try:
-        grid_result = optimizer.optimize_blend(
-            lookback=lookback,
-            methods=methods,
-            technique='grid',
-            grid_points=4
-        )
-        print_optimization_result(grid_result, "Grid Search Result")
-    except Exception as e:
-        print(f"   Grid search failed: {e}")
-    
     # Gradient-based
-    print("\n3b. Gradient-Based Optimization (faster)...")
+    print("\n3a. Gradient-Based Optimization (faster, local optima)...")
     try:
         grad_result = optimizer.optimize_blend(
             lookback=lookback,
@@ -148,7 +135,7 @@ def main():
         print(f"   Gradient optimization failed: {e}")
     
     # Differential Evolution
-    print("\n3c. Differential Evolution (recommended balance)...")
+    print("\n3b. Differential Evolution (recommended - global optimization)...")
     try:
         de_result = optimizer.optimize_blend(
             lookback=lookback,
@@ -158,6 +145,21 @@ def main():
         print_optimization_result(de_result, "Differential Evolution Result")
     except Exception as e:
         print(f"   Differential evolution failed: {e}")
+    
+    # Bayesian Optimization with Optuna
+    print("\n3c. Bayesian Optimization with Optuna (smart search)...")
+    print("   (Install optuna with: uv add optuna)")
+    try:
+        bayes_result = optimizer.optimize_blend(
+            lookback=lookback,
+            methods=methods,
+            technique='bayesian',
+            n_trials=50
+        )
+        print_optimization_result(bayes_result, "Bayesian Optimization Result")
+    except Exception as e:
+        print(f"   Bayesian optimization failed: {e}")
+        print("   (Falls back to differential evolution if optuna not installed)")
     
     # ========================================================================
     # Example 2: Compare different lookback horizons
@@ -326,10 +328,10 @@ def main():
 KEY FINDINGS:
 
 1. OPTIMIZATION TECHNIQUES:
-   - Grid Search: Most thorough, good for 2-3 methods
    - Gradient: Fastest, may find local optima
-   - Differential Evolution: Best balance, recommended for production
-   - Bayesian: Best for complex spaces, requires scikit-optimize
+   - Differential Evolution: Global optimization, recommended for production
+   - Bayesian (Optuna): Smart search with TPE sampler, best for many methods
+     Install: uv add optuna
 
 2. LOOKBACK HORIZON:
    - Shorter (21-63 days): Faster adaptation, more noise
