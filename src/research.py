@@ -102,7 +102,7 @@ from sklearn.decomposition import (
 from sklearn.preprocessing import StandardScaler
 import openai                           # pip install openai>=1.2
 
-from alphavantage_system import DataBackend
+from .alphavantage_system import DataBackend
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
@@ -596,7 +596,7 @@ class FactorResearchSystem(DataBackend):
 
     # ---------------- LLM naming ---------------- #
     def name_factors(
-        self, model: str = "gpt-4o-mini", top_n: int = 8,
+        self, model: str = "gpt-5.2-mini", top_n: int = 8,
         force_refresh: bool = False, cache_path: str = "factor_names.json"
     ) -> dict[str, str]:
         """
@@ -609,10 +609,10 @@ class FactorResearchSystem(DataBackend):
         
         Parameters
         ----------
-        model : str, default "gpt-4o-mini"
+        model : str, default "gpt-5.2-mini"
             OpenAI model to use for factor naming.
-            Options: "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"
-            Recommendation: "gpt-4o-mini" for cost-effectiveness
+            Options: "gpt-5.2-mini", "gpt-5.2", "gpt-5.2-pro"
+            Recommendation: "gpt-5.2-mini" for cost-effectiveness
             
         top_n : int, default 8
             Number of top positive and negative stocks to analyze per factor.
@@ -662,7 +662,7 @@ class FactorResearchSystem(DataBackend):
         - **API Cost**: ~$0.01-0.05 per factor depending on model
         - **Caching**: Significantly reduces costs for repeated analysis
         - **Batch Processing**: All factors sent in single conversation
-        - **Model Choice**: gpt-4o-mini is 10-20x cheaper than gpt-4o
+        - **Model Choice**: gpt-5.2-mini is cost-effective for most use cases
         
         Error Handling
         -------------
@@ -690,7 +690,7 @@ class FactorResearchSystem(DataBackend):
         >>> #  "F2": "Size Factor: Large cap vs small cap stocks"}
         
         >>> # Use more expensive model for better names
-        >>> premium_names = frs.name_factors(model="gpt-4o", top_n=12)
+        >>> premium_names = frs.name_factors(model="gpt-5.2", top_n=12)
         
         >>> # Force refresh of factor names
         >>> updated_names = frs.name_factors(force_refresh=True)
@@ -854,8 +854,10 @@ class FactorResearchSystem(DataBackend):
     # ---------- fundamental OLS ---------- #
     def _build_exposures(self, px: pd.DataFrame):
         f_fields = [
-            "PriceToSalesRatioTTM", "ProfitMargin", "Sector",
-            "Industry", "Beta", "MarketCapitalization"
+            "PriceToSalesRatioTTM", "PriceToBookRatio", "ForwardPE", "ProfitMargin", 
+            "ReturnOnEquityTTM", "QuarterlyEarningsGrowthYOY", "Beta", 
+            "OperatingMarginTTM", "PercentInstitutions", "Sector",
+            "Industry", "MarketCapitalization"
         ]
         fnd = self.get_fundamentals(self.universe, fields=f_fields)
         
@@ -863,7 +865,9 @@ class FactorResearchSystem(DataBackend):
         print(f"📊 Data types: {fnd.dtypes.to_dict()}")
         
         # Convert numeric columns and handle mixed types
-        numeric_cols = ["PriceToSalesRatioTTM", "ProfitMargin", "Beta", "MarketCapitalization"]
+        numeric_cols = ["PriceToSalesRatioTTM", "PriceToBookRatio", "ForwardPE", "ProfitMargin", 
+                       "ReturnOnEquityTTM", "QuarterlyEarningsGrowthYOY", "Beta", 
+                       "OperatingMarginTTM", "PercentInstitutions", "MarketCapitalization"]
         for col in numeric_cols:
             if col in fnd.columns:
                 fnd[col] = pd.to_numeric(fnd[col], errors='coerce')
@@ -875,7 +879,9 @@ class FactorResearchSystem(DataBackend):
         fundamental_factors = []
         
         # Add fundamental factors if we have enough data
-        fundamental_cols = ["PriceToSalesRatioTTM", "ProfitMargin", "Beta"]
+        fundamental_cols = ["PriceToSalesRatioTTM", "PriceToBookRatio", "ForwardPE", "ProfitMargin", 
+                           "ReturnOnEquityTTM", "QuarterlyEarningsGrowthYOY", "Beta", 
+                           "OperatingMarginTTM", "PercentInstitutions"]
         valid_fundamental = fnd[fundamental_cols].dropna(thresh=2)  # Need at least 2 valid values
         
         if len(valid_fundamental) > 10:  # Need at least 10 stocks with fundamental data
@@ -931,21 +937,39 @@ class FactorResearchSystem(DataBackend):
         mom_63 = px.pct_change(63)
         vol_21 = rets.rolling(21).std() * _ann
 
+        # OPTIMIZED: Pre-compute z-scored static factors once (instead of per-date)
+        # The fundamental factors in `desc` don't change across dates
+        desc_z = _z(desc)
+        desc_cols = list(desc_z.columns)
+        time_varying_cols = ["Momentum_1M", "Momentum_3M", "Vol_1M"]
+
+        # Pre-extract aligned universe indices for efficiency
+        universe_set = set(self.universe)
+        valid_universe = [s for s in self.universe if s in desc_z.index]
+
         expos = {}
         for dt in rets.index:
-            e = pd.DataFrame({
-                "Momentum_1M": mom_21.loc[dt],
-                "Momentum_3M": mom_63.loc[dt],
-                "Vol_1M":      vol_21.loc[dt]
+            # Build time-varying factors for this date
+            mom_1m_vals = mom_21.loc[dt]
+            mom_3m_vals = mom_63.loc[dt]
+            vol_vals = vol_21.loc[dt]
+
+            # Z-score only the time-varying columns (3 columns vs entire combined DataFrame)
+            tv_df = pd.DataFrame({
+                "Momentum_1M": mom_1m_vals,
+                "Momentum_3M": mom_3m_vals,
+                "Vol_1M": vol_vals
             })
-            # Combine fundamental and momentum factors (no intercept yet)
-            combined = pd.concat([desc, e], axis=1)
-            standardized = _z(combined)
-            
+            tv_z = _z(tv_df)
+
+            # Combine pre-computed static z-scores with freshly computed time-varying z-scores
+            # Use concat with copy=False to avoid unnecessary memory allocation
+            standardized = pd.concat([desc_z, tv_z], axis=1)
+
             # Add intercept column AFTER standardization (it should remain constant)
             standardized["Intercept"] = 1.0
-                
-            expos[dt] = standardized.loc[self.universe]
+
+            expos[dt] = standardized.loc[valid_universe]
         return expos
 
     def _cross_sectional_ols(self, rets, expos):
@@ -981,19 +1005,14 @@ class FactorResearchSystem(DataBackend):
                 failed_dates.append(dt)
                 continue
             
-            # Check for rank deficiency
+            # Always use ridge regression with small regularization for numerical stability
+            # This avoids the expensive SVD rank check while ensuring robust solutions
             try:
-                # Use SVD to check matrix rank
-                rank = np.linalg.matrix_rank(X)
-                if rank < X.shape[1]:
-                    # Use ridge regression with small regularization (silently)
-                    XTX = X.T @ X
-                    regularization = 1e-6 * np.trace(XTX) / X.shape[1]
-                    XTX_reg = XTX + regularization * np.eye(X.shape[1])
-                    f = np.linalg.solve(XTX_reg, X.T @ y)
-                else:
-                    # Standard least squares
-                    f, *_ = np.linalg.lstsq(X, y, rcond=None)
+                XTX = X.T @ X
+                # Small regularization: 1e-8 * trace ensures minimal bias while preventing singularity
+                regularization = 1e-8 * np.trace(XTX) / X.shape[1]
+                XTX_reg = XTX + regularization * np.eye(X.shape[1])
+                f = np.linalg.solve(XTX_reg, X.T @ y)
                     
                 facs.append(f)
                 
@@ -1017,6 +1036,166 @@ class FactorResearchSystem(DataBackend):
             columns=expos[next(iter(expos))].columns
         )
         return f_df.sort_index(), expos[max(expos)]
+
+    # ========================================================= #
+    # ----------------  SIGNAL GENERATION  -------------------- #
+    # ========================================================= #
+    def get_trading_signals(self) -> Dict[str, Any]:
+        """
+        Generate comprehensive trading signals from fitted factors.
+
+        This method integrates all signal generation components:
+        - Factor momentum analysis (RSI, MACD, ADX)
+        - Extreme value detection (z-scores, Bollinger Bands)
+        - Cross-sectional ranking
+        - Regime detection
+
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary containing all signal types:
+            - 'momentum_signals': Dict of factor momentum signals
+            - 'extreme_alerts': List of extreme value alerts
+            - 'cross_sectional_signals': List of stock signals
+            - 'regime': Current market regime
+            - 'summary': Human-readable summary
+
+        Raises
+        ------
+        RuntimeError
+            If fit_factors() has not been called
+
+        Examples
+        --------
+        >>> frs.fit_factors()
+        >>> signals = frs.get_trading_signals()
+        >>> print(signals['summary'])
+        >>> print(f"Active alerts: {len(signals['extreme_alerts'])}")
+        """
+        if self._factors is None:
+            raise RuntimeError("run fit_factors() first")
+
+        from .trading_signals import FactorMomentumAnalyzer
+        from .cross_sectional import CrossSectionalAnalyzer
+        from .regime_detection import RegimeDetector
+        from .signal_aggregator import SignalAggregator
+
+        signals = {}
+
+        # Generate momentum signals
+        _LOGGER.info("Generating momentum signals...")
+        momentum_analyzer = FactorMomentumAnalyzer(self._factors)
+        signals['momentum_signals'] = momentum_analyzer.get_all_signals()
+        signals['extreme_alerts'] = momentum_analyzer.get_all_extreme_alerts()
+        signals['signal_summary'] = momentum_analyzer.get_signal_summary()
+
+        # Generate cross-sectional signals
+        if self._expos is not None:
+            _LOGGER.info("Generating cross-sectional signals...")
+            cross_analyzer = CrossSectionalAnalyzer(self._expos)
+            signals['cross_sectional_signals'] = (
+                cross_analyzer.generate_long_short_signals(top_pct=0.1, bottom_pct=0.1)
+            )
+            signals['cross_sectional_rankings'] = cross_analyzer.rank_universe()
+        else:
+            signals['cross_sectional_signals'] = []
+            signals['cross_sectional_rankings'] = None
+
+        # Generate regime signals
+        try:
+            _LOGGER.info("Generating regime signals...")
+            regime_detector = RegimeDetector(self._factors)
+            regime_detector.fit_hmm(n_regimes=3)
+            signals['regime'] = regime_detector.detect_current_regime()
+            signals['regime_allocation'] = regime_detector.generate_regime_signals()
+            signals['regime_summary'] = regime_detector.get_regime_summary()
+        except Exception as e:
+            _LOGGER.warning(f"Regime detection failed: {e}")
+            signals['regime'] = None
+            signals['regime_allocation'] = None
+            signals['regime_summary'] = None
+
+        # Generate consensus using aggregator
+        try:
+            _LOGGER.info("Generating consensus signals...")
+            aggregator = SignalAggregator(self)
+            aggregator.add_momentum_signals(momentum_analyzer)
+            if self._expos is not None:
+                aggregator.add_cross_sectional_signals(cross_analyzer)
+            if signals['regime'] is not None:
+                aggregator.add_regime_signals(regime_detector)
+
+            signals['consensus'] = aggregator.aggregate_signals()
+            signals['top_opportunities'] = aggregator.get_top_opportunities(n=10)
+            signals['summary'] = aggregator.generate_alert_summary()
+        except Exception as e:
+            _LOGGER.warning(f"Signal aggregation failed: {e}")
+            signals['consensus'] = {}
+            signals['top_opportunities'] = []
+            signals['summary'] = "Signal aggregation not available"
+
+        _LOGGER.info("Trading signal generation complete")
+        return signals
+
+    def export_signals(self, filepath: str = "trading_signals.csv") -> None:
+        """
+        Export trading signals to CSV file.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to output CSV file
+
+        Examples
+        --------
+        >>> frs.fit_factors()
+        >>> frs.export_signals("signals_2024-01-15.csv")
+        """
+        signals = self.get_trading_signals()
+
+        data = []
+
+        # Add momentum signals
+        for factor, sig_data in signals['momentum_signals'].items():
+            data.append({
+                'entity': factor,
+                'entity_type': 'factor',
+                'signal_type': 'momentum',
+                'direction': sig_data['combined_signal'],
+                'confidence': 70 if 'strong' in sig_data['combined_signal'] else 50,
+                'rsi': sig_data.get('rsi'),
+                'adx': sig_data.get('adx'),
+                'regime': sig_data.get('regime')
+            })
+
+        # Add cross-sectional signals
+        for sig in signals['cross_sectional_signals']:
+            data.append({
+                'entity': sig.ticker,
+                'entity_type': 'stock',
+                'signal_type': 'cross_sectional',
+                'direction': sig.direction.value,
+                'confidence': sig.confidence * 100,
+                'composite_score': sig.composite_score,
+                'decile': sig.decile,
+                'rank': sig.rank
+            })
+
+        # Add extreme alerts
+        for alert in signals['extreme_alerts']:
+            data.append({
+                'entity': alert.factor_name,
+                'entity_type': 'factor',
+                'signal_type': 'extreme_value',
+                'direction': 'short' if alert.direction == 'extreme_high' else 'long',
+                'confidence': min(95, 50 + abs(alert.z_score) * 15),
+                'z_score': alert.z_score,
+                'percentile': alert.percentile
+            })
+
+        df = pd.DataFrame(data)
+        df.to_csv(filepath, index=False)
+        _LOGGER.info(f"Exported {len(df)} signals to {filepath}")
 
     # ---------- statistical engines ---------- #
     def _rolling_stat_model(self, rets: pd.DataFrame):

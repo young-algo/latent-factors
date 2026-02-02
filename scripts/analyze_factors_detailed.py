@@ -90,7 +90,13 @@ def detailed_factor_analysis(factor_names_file="factor_names.csv", n_stocks=5):
         
         # Get fundamentals for context
         print("📊 Loading fundamental data...")
-        fundamentals = frs.get_fundamentals(returns.columns.tolist())
+        fundamental_fields = [
+            "Sector", "MarketCapitalization", "PERatio", "DividendYield",
+            "PriceToSalesRatioTTM", "PriceToBookRatio", "ForwardPE", "ProfitMargin", 
+            "ReturnOnEquityTTM", "QuarterlyEarningsGrowthYOY", "Beta", 
+            "OperatingMarginTTM", "PercentInstitutions"
+        ]
+        fundamentals = frs.get_fundamentals(returns.columns.tolist(), fields=fundamental_fields)
         
         # Re-run factor discovery with same parameters
         method_enum_map = {
@@ -186,7 +192,10 @@ def detailed_factor_analysis(factor_names_file="factor_names.csv", n_stocks=5):
         detailed_results = loadings.copy()
         if not fundamentals.empty:
             # Add fundamental data
-            fund_cols = ['Sector', 'MarketCapitalization', 'PERatio', 'DividendYield']
+            fund_cols = ['Sector', 'MarketCapitalization', 'PERatio', 'DividendYield',
+                        'PriceToSalesRatioTTM', 'PriceToBookRatio', 'ForwardPE', 'ProfitMargin', 
+                        'ReturnOnEquityTTM', 'QuarterlyEarningsGrowthYOY', 'Beta', 
+                        'OperatingMarginTTM', 'PercentInstitutions']
             for col in fund_cols:
                 if col in fundamentals.columns:
                     detailed_results[f'Fund_{col}'] = fundamentals[col]

@@ -203,26 +203,24 @@ def statistical_factors(returns: pd.DataFrame,
     F = model.fit_transform(X)                    # obs × k (factor scores)
     B = model.components_.T                       # asset × k (factor loadings)
 
-    # CRITICAL FIX: Calculate proper factor returns via regression
-    # Factor returns should be calculated by regressing stock returns on loadings
-    factor_returns = []
-    loadings_df = pd.DataFrame(B, index=returns.columns, 
+    # Build loadings DataFrame with factor column names
+    loadings_df = pd.DataFrame(B, index=returns.columns,
                               columns=[f"F{k}" for k in range(1, B.shape[1] + 1)])
-    
-    for t in range(len(returns)):
-        daily_returns = returns.iloc[t]
-        daily_factor_returns = []
-        
-        for factor_col in loadings_df.columns:
-            factor_loadings = loadings_df[factor_col]
-            # Weight daily returns by factor loadings and normalize
-            factor_exposure = factor_loadings / factor_loadings.abs().sum()
-            factor_return = (daily_returns * factor_exposure).sum()
-            daily_factor_returns.append(factor_return)
-        
-        factor_returns.append(daily_factor_returns)
-    
-    fac_ret = pd.DataFrame(factor_returns, index=returns.index,
+
+    # VECTORIZED: Calculate factor returns via matrix multiplication
+    # Each factor's exposure weights are normalized by absolute sum
+    # Factor return = weighted sum of asset returns, where weights = loadings / |loadings|.sum()
+    #
+    # Mathematical equivalence to the original loop:
+    #   for t in range(T):
+    #       for k in range(K):
+    #           factor_return[t,k] = sum(returns[t,:] * loadings[:,k] / abs(loadings[:,k]).sum())
+    #
+    # Vectorized form: F = R @ B_normalized, where B_normalized[:,k] = B[:,k] / |B[:,k]|.sum()
+    B_normalized = B / np.abs(B).sum(axis=0, keepdims=True)  # (N, K)
+    factor_returns_array = returns.values @ B_normalized      # (T, N) @ (N, K) = (T, K)
+
+    fac_ret = pd.DataFrame(factor_returns_array, index=returns.index,
                            columns=loadings_df.columns)
     return fac_ret, loadings_df
 

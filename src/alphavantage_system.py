@@ -8,22 +8,25 @@ New in v3
 * `is_etf(<symbol>)`            – fast check via Alpha‑Vantage “AssetType”
 * Local cache (`etf_holdings` table) avoids repeated scraping
 * Primary holdings source  :  AlphaVantage ETF_PROFILE API
-* Fallback holdings source :  simple HTML scrape via yfinance.info
+* Primary holdings source  :  AlphaVantage ETF_PROFILE API
+* No fallback sources (AlphaVantage exclusive)
 
-All previous functionality (price cache, fundamentals cache, yfinance
-fallback) is retained.
+All previous functionality (price cache, fundamentals cache) is retained.
 """
 
 from __future__ import annotations
-import json, logging, os, sqlite3, time
+import json, logging, os, random, sqlite3, time, threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from queue import Queue, Empty
 from typing import Sequence, Mapping, Any
 
 import numpy as np
 import pandas as pd
 import requests
-import yfinance as yf
+
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
@@ -89,20 +92,82 @@ def _coerce_numeric(d: Mapping[str, str]) -> dict[str, Any]:
     return out
 
 
+class _ConnectionPool:
+    """
+    Simple SQLite connection pool for thread-safe database access.
+
+    Maintains a pool of reusable connections to avoid the overhead of
+    creating new connections for each database operation.
+    """
+    def __init__(self, db_path: Path, pool_size: int = 5):
+        self.db_path = db_path
+        self._pool: Queue[sqlite3.Connection] = Queue(maxsize=pool_size)
+        self._pool_size = pool_size
+        self._created = 0
+        self._lock = threading.Lock()
+
+    def _create_connection(self) -> sqlite3.Connection:
+        """Create a new SQLite connection with optimal settings."""
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent access
+        return conn
+
+    @contextmanager
+    def connection(self):
+        """
+        Get a connection from the pool (or create one if pool empty and under limit).
+
+        Usage:
+            with pool.connection() as conn:
+                conn.execute(...)
+        """
+        conn = None
+        try:
+            # Try to get an existing connection from the pool
+            conn = self._pool.get_nowait()
+        except Empty:
+            # Pool empty - create new connection if under limit
+            with self._lock:
+                if self._created < self._pool_size:
+                    conn = self._create_connection()
+                    self._created += 1
+            # If at limit, wait for a connection to become available
+            if conn is None:
+                conn = self._pool.get()
+
+        try:
+            yield conn
+        finally:
+            # Return connection to pool
+            try:
+                self._pool.put_nowait(conn)
+            except:
+                # Pool full, close this connection
+                conn.close()
+
+    def close_all(self):
+        """Close all pooled connections."""
+        while True:
+            try:
+                conn = self._pool.get_nowait()
+                conn.close()
+            except Empty:
+                break
+
+
 class DataBackend:
     """
-    Comprehensive financial data backend with caching and fallback mechanisms.
+    Comprehensive financial data backend with caching mechanism.
     
     This class provides a unified interface for accessing price data, fundamental
     analysis, and ETF holdings from Alpha Vantage API with intelligent local
-    caching and yfinance fallback support.
+    caching.
     
     Architecture
     -----------
     The backend operates on three data streams:
     1. **Price Data Flow**: API → Cache → DataFrame
        - Primary: Alpha Vantage TIME_SERIES_DAILY_ADJUSTED
-       - Fallback: yfinance Ticker.history()
        - Cache: SQLite 'prices' table with daily granularity
        
     2. **Fundamentals Flow**: API → JSON Cache → Structured DataFrame  
@@ -112,20 +177,18 @@ class DataBackend:
        
     3. **ETF Holdings Flow**: API → Structured Cache → DataFrame
        - Primary: Alpha Vantage ETF_PROFILE endpoint
-       - Fallback: yfinance Ticker.get_holdings()
        - Cache: SQLite 'etf_holdings' table with constituent mapping
        
     Performance Characteristics
     --------------------------
     - **API Rate Limits**: 75 calls/minute for both prices and fundamentals
     - **Cache Hit Rate**: ~90%+ for repeated analysis on same date
-    - **Fallback Success**: ~95%+ when Alpha Vantage fails
     - **Memory Usage**: O(n*d) where n=tickers, d=days of history
     
     Error Handling
     -------------
     - **Network Timeouts**: Exponential backoff with 3 retries
-    - **API Errors**: Graceful fallback to yfinance
+    - **API Errors**: Bubbles up exceptions (no fallback)
     - **Data Validation**: Comprehensive filtering of invalid tickers
     - **Cache Corruption**: Automatic schema recreation
     
@@ -197,10 +260,14 @@ class DataBackend:
         self.start     = pd.to_datetime(start_date or "2000-01-01")
         self.db_path   = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Connection pool for efficient database access
+        self._conn_pool = _ConnectionPool(self.db_path, pool_size=5)
         self._ensure_schema()
 
         self._t_last_px  = 0.0
         self._t_last_fnd = 0.0
+        self._lock = threading.Lock()
 
     # ================================================================= #
     # --------------------  PUBLIC HELPERS  --------------------------- #
@@ -250,7 +317,7 @@ class DataBackend:
         
         Error Handling
         -------------
-        - Network failures: Automatic yfinance fallback
+        - Network failures: Retries with exponential backoff
         - Invalid tickers: Excluded from result (logged as warnings)
         - API rate limits: Automatic throttling with progress logging
         
@@ -260,17 +327,50 @@ class DataBackend:
         >>> prices = backend.get_prices(["SPY"], end="2023-12-31")
         """
         _LOGGER.info("Loading price data for %d tickers", len(tickers))
-        
-        frames = []
-        for i, tk in enumerate(tickers, 1):
-            if i % 50 == 0 or i == 1:  # Show progress every 50 tickers
-                _LOGGER.info("Processing ticker %d/%d: %s", i, len(tickers), tk)
-            self._maybe_update_px(tk)
-            frames.append(self._load_px(tk))
-        
-        _LOGGER.info("Concatenating price data")
-        
-        df = pd.concat(frames, axis=1).sort_index()
+
+        # Use dict to collect series - more memory efficient than list + concat
+        price_data: dict[str, pd.Series] = {}
+        failed_tickers = []
+
+        def process_ticker(tk):
+            try:
+                self._maybe_update_px(tk)
+                px_series = self._load_px(tk)
+                if not px_series.empty:
+                    return (tk, px_series)
+                else:
+                    return (tk, None)
+            except Exception as e:
+                _LOGGER.warning(f"Failed to get data for {tk}: {str(e)}")
+                return (tk, None)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_ticker = {executor.submit(process_ticker, tk): tk for tk in tickers}
+            for i, future in enumerate(as_completed(future_to_ticker), 1):
+                tk = future_to_ticker[future]
+                if i % 50 == 0 or i == 1:
+                    _LOGGER.info("Processing ticker %d/%d: %s", i, len(tickers), tk)
+
+                try:
+                    ticker, series = future.result()
+                    if series is not None:
+                        price_data[ticker] = series
+                    else:
+                        failed_tickers.append(ticker)
+                except Exception as e:
+                    _LOGGER.warning(f"Exception processing {tk}: {e}")
+                    failed_tickers.append(tk)
+
+        if failed_tickers:
+            _LOGGER.warning(f"Failed to get data for {len(failed_tickers)} tickers: {failed_tickers[:10]}{'...' if len(failed_tickers) > 10 else ''}")
+
+        _LOGGER.info(f"Building DataFrame for {len(price_data)} successful tickers")
+
+        if not price_data:
+            return pd.DataFrame()
+
+        # Construct DataFrame directly from dict (single allocation)
+        df = pd.DataFrame(price_data).sort_index()
         df.index = pd.to_datetime(df.index)
         if end:
             df = df.loc[:end]
@@ -341,19 +441,37 @@ class DataBackend:
         """
         _LOGGER.info("Loading fundamentals for %d tickers", len(tickers))
         
+        _LOGGER.info("Loading fundamentals for %d tickers", len(tickers))
+        
         records = {}
-        for i, tk in enumerate(tickers, 1):
-            if i % 100 == 0 or i == 1:  # Show progress every 100 tickers for fundamentals
-                _LOGGER.info("Processing fundamentals %d/%d: %s", i, len(tickers), tk)
+        
+        def process_fundamental(tk):
+            try:
+                self._maybe_update_fnd(tk, force_refresh)
+                rec = self._load_fnd(tk)
+                if not rec:
+                    return None
+                if fields:
+                    rec = {k: rec.get(k) for k in fields}
+                return _coerce_numeric(rec)
+            except Exception as e:
+                _LOGGER.warning(f"Failed to get fundamentals for {tk}: {e}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_ticker = {executor.submit(process_fundamental, tk): tk for tk in tickers}
+            for i, future in enumerate(as_completed(future_to_ticker), 1):
+                tk = future_to_ticker[future]
+                if i % 100 == 0 or i == 1:
+                    _LOGGER.info("Processing fundamentals %d/%d: %s", i, len(tickers), tk)
                 
-            self._maybe_update_fnd(tk, force_refresh)
-            rec = self._load_fnd(tk)
-            if not rec:
-                continue
-            if fields:
-                rec = {k: rec.get(k) for k in fields}
-            records[tk] = _coerce_numeric(rec)
-            
+                try:
+                    result = future.result()
+                    if result:
+                        records[tk] = result
+                except Exception as e:
+                    _LOGGER.warning(f"Exception processing fundamentals for {tk}: {e}")
+
         _LOGGER.info("Fundamentals loaded for %d tickers", len(records))
         return pd.DataFrame.from_dict(records, orient="index")
 
@@ -388,11 +506,7 @@ class DataBackend:
            - Comprehensive holdings data with official weights
            - Covers major ETFs (SPY, QQQ, IWM, sector ETFs)
            
-        2. **Fallback**: yfinance Ticker.get_holdings()
-           - When Alpha Vantage fails or has incomplete data
-           - Generally reliable for popular ETFs
-           
-        3. **Cache**: SQLite etf_holdings table
+        2. **Cache**: SQLite etf_holdings table
            - Daily refresh cycle (configurable via ETF_CACHE_DAYS)
            - Avoids repeated API calls for same ETF
            
@@ -413,7 +527,7 @@ class DataBackend:
         Error Handling
         -------------
         - Invalid ETF symbols: Returns empty DataFrame
-        - API failures: Automatic fallback to yfinance
+        - API failures: Raises RuntimeError
         - Data corruption: Comprehensive validation and filtering
         
         Examples
@@ -467,7 +581,8 @@ class DataBackend:
         # Common ETFs - check these first to avoid API calls
         common_etfs = {"SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "EEM", "GLD", 
                        "TLT", "XLF", "XLE", "XLK", "XLV", "XLI", "XLY", "XLP",
-                       "XLB", "XLU", "XLRE", "VNQ", "AGG", "BND", "LQD", "HYG"}
+                       "XLB", "XLU", "XLRE", "VNQ", "AGG", "BND", "LQD", "HYG",
+                       "VTHR"}
         if symbol.upper() in common_etfs:
             return True
             
@@ -483,7 +598,7 @@ class DataBackend:
     # --------------------  INTERNAL – SCHEMA  ------------------------ #
     # ================================================================= #
     def _ensure_schema(self) -> None:
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn_pool.connection() as con:
             # price + meta
             con.execute(
                 """CREATE TABLE IF NOT EXISTS prices (
@@ -534,13 +649,8 @@ class DataBackend:
             return
         
         _LOGGER.info("Downloading price data for %s...", ticker)
-        try:
-            self._download_px_av(ticker)
-            _LOGGER.info("✓ Downloaded %s from AlphaVantage", ticker)
-        except Exception as exc:
-            _LOGGER.warning("%s price via AlphaVantage failed: %s; using yfinance", ticker, exc)
-            self._download_px_yf(ticker)
-            _LOGGER.info("✓ Downloaded %s from yfinance", ticker)
+        self._download_px_av(ticker)
+        _LOGGER.info("✓ Downloaded %s from AlphaVantage", ticker)
 
     def _download_px_av(self, ticker: str) -> None:
         self._rate_limit("px")
@@ -559,9 +669,14 @@ class DataBackend:
                 timeout = 30 + (attempt * 15)  # Increase timeout on retries
                 _LOGGER.debug(f"Downloading prices for {ticker} (attempt {attempt + 1}/{max_retries}, timeout={timeout}s)")
                 r = requests.get(self.AV_URL, params=params, timeout=timeout)
-                self._t_last_px = time.time()
                 r.raise_for_status()
                 data = r.json()
+                
+                if "Information" in data and ("rate limit" in data["Information"] or "Burst" in data["Information"]):
+                    _LOGGER.warning(f"Rate limit hit for {ticker}: {data['Information']}. Sleeping 60s...")
+                    time.sleep(60)
+                    continue
+
                 break  # Success, exit retry loop
                 
             except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
@@ -590,25 +705,25 @@ class DataBackend:
         ts.index = pd.to_datetime(ts.index)
         self._store_px(ticker, ts)
 
-    def _download_px_yf(self, ticker: str) -> None:
-        px = yf.download(ticker, start=self.start, progress=False, auto_adjust=True)["Adj Close"]
-        if px.empty:
-            raise RuntimeError(f"yfinance empty for {ticker}")
-        self._store_px(ticker, px.to_frame("adj_close"))
+
 
     def _store_px(self, ticker: str, frame: pd.DataFrame) -> None:
         frame = frame.loc[frame.index >= self.start]
-        with sqlite3.connect(self.db_path) as con:
-            frame.assign(ticker=ticker).to_sql(
-                "prices", con, if_exists="append", index_label="date", method="multi"
-            )
-            con.execute(
-                "REPLACE INTO meta VALUES (?, ?)",
-                (ticker, frame.index.max().strftime("%Y-%m-%d")),
-            )
+        with self._lock:
+            with self._conn_pool.connection() as con:
+                # Remove existing data for this ticker to avoid unique constraint violations
+                con.execute("DELETE FROM prices WHERE ticker=?", (ticker,))
+                
+                frame.assign(ticker=ticker).to_sql(
+                    "prices", con, if_exists="append", index_label="date", method="multi"
+                )
+                con.execute(
+                    "REPLACE INTO meta VALUES (?, ?)",
+                    (ticker, frame.index.max().strftime("%Y-%m-%d")),
+                )
 
     def _load_px(self, ticker: str) -> pd.Series:
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn_pool.connection() as con:
             df = pd.read_sql(
                 "SELECT date, adj_close FROM prices WHERE ticker=?",
                 con,
@@ -618,7 +733,7 @@ class DataBackend:
         return df.set_index("date")["adj_close"].rename(ticker)
 
     def _last_price_update(self, ticker: str) -> pd.Timestamp | None:
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn_pool.connection() as con:
             cur = con.cursor()
             cur.execute("SELECT last_update FROM meta WHERE ticker=?", (ticker,))
             row = cur.fetchone()
@@ -650,9 +765,14 @@ class DataBackend:
                 timeout = 30 + (attempt * 15)  # Increase timeout on retries
                 _LOGGER.debug(f"Downloading fundamentals for {ticker} (attempt {attempt + 1}/{max_retries}, timeout={timeout}s)")
                 r = requests.get(self.AV_URL, params=params, timeout=timeout)
-                self._t_last_fnd = time.time()
                 r.raise_for_status()
                 data = r.json()
+                
+                if "Information" in data and ("rate limit" in data["Information"] or "Burst" in data["Information"]):
+                    _LOGGER.warning(f"Rate limit hit for {ticker}: {data['Information']}. Sleeping 60s...")
+                    time.sleep(60)
+                    continue
+
                 break  # Success, exit retry loop
                 
             except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
@@ -681,21 +801,22 @@ class DataBackend:
             # Assume ETF for common ETF tickers
             data = {"AssetType": "ETF" if ticker in ["SPY", "QQQ", "IWM", "DIA"] else "Stock"}
             
-        with sqlite3.connect(self.db_path) as con:
-            con.execute(
-                "REPLACE INTO fundamentals VALUES (?, ?, ?)",
-                (ticker, datetime.now().strftime("%Y-%m-%d"), json.dumps(data)),
-            )
+        with self._lock:
+            with self._conn_pool.connection() as con:
+                con.execute(
+                    "REPLACE INTO fundamentals VALUES (?, ?, ?)",
+                    (ticker, datetime.now().strftime("%Y-%m-%d"), json.dumps(data)),
+                )
 
     def _load_fnd(self, ticker: str) -> Mapping[str, Any]:
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn_pool.connection() as con:
             cur = con.cursor()
             cur.execute("SELECT json FROM fundamentals WHERE ticker=?", (ticker,))
             row = cur.fetchone()
         return json.loads(row[0]) if row else {}
 
     def _last_fnd_update(self, ticker: str) -> pd.Timestamp | None:
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn_pool.connection() as con:
             cur = con.cursor()
             cur.execute("SELECT last_update FROM fundamentals WHERE ticker=?", (ticker,))
             row = cur.fetchone()
@@ -711,13 +832,8 @@ class DataBackend:
             return
         
         _LOGGER.info("Downloading ETF holdings for %s...", etf)
-        try:
-            self._download_holdings_av(etf)
-            _LOGGER.info("Successfully downloaded %s holdings from AlphaVantage", etf)
-        except Exception as exc:
-            _LOGGER.warning("AlphaVantage holdings failed for %s: %s; trying yfinance", etf, exc)
-            self._download_holdings_yf(etf)
-            _LOGGER.info("Successfully downloaded %s holdings from yfinance", etf)
+        self._download_holdings_av(etf)
+        _LOGGER.info("Successfully downloaded %s holdings from AlphaVantage", etf)
 
     # -------- primary source: AlphaVantage ETF_PROFILE API -------- #
     def _download_holdings_av(self, etf: str) -> None:
@@ -735,9 +851,15 @@ class DataBackend:
                 timeout = 30 + (attempt * 15)  # Increase timeout on retries
                 _LOGGER.debug(f"Downloading holdings for {etf} (attempt {attempt + 1}/{max_retries}, timeout={timeout}s)")
                 r = requests.get(self.AV_URL, params=params, timeout=timeout)
-                self._t_last_fnd = time.time()
                 r.raise_for_status()
                 data = r.json()
+                
+                # Check for rate limit errors
+                if "Information" in data and ("rate limit" in data["Information"] or "Burst" in data["Information"]):
+                    _LOGGER.warning(f"Rate limit hit for {etf}: {data['Information']}. Sleeping 60s...")
+                    time.sleep(60)
+                    continue
+
                 break  # Success, exit retry loop
                 
             except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
@@ -778,37 +900,21 @@ class DataBackend:
         
         self._store_etf_holdings(etf, df)
 
-    # -------- fallback: yfinance summary table -------- #
-    def _download_holdings_yf(self, etf: str) -> None:
-        yf_t = yf.Ticker(etf)
-        try:
-            tbl = yf_t.get_holdings()  # requires yfinance ≥0.2.33
-        except Exception as exc:
-            raise RuntimeError(f"yfinance holdings unavailable: {exc}")
-        if tbl.empty:
-            raise RuntimeError("yfinance returned empty holdings")
-        tbl.rename(columns={"symbol": "constituent", "holding": "weight"}, inplace=True)
-        
-        # Filter out invalid constituents
-        tbl = tbl[tbl["constituent"].notna()]
-        tbl = tbl[~tbl["constituent"].str.upper().isin(["N/A", "NA", "NULL", "NONE", ""])]
-        tbl = tbl[tbl["constituent"].str.len() <= 10]  # Reasonable ticker length
-        
-        tbl["weight"] = tbl["weight"].astype(float)
-        self._store_etf_holdings(etf, tbl)
+
 
     def _store_etf_holdings(self, etf: str, frame: pd.DataFrame) -> None:
         frame = frame[["constituent", "weight"]].dropna()
         today = datetime.now().strftime("%Y-%m-%d")
-        with sqlite3.connect(self.db_path) as con:
-            con.execute("DELETE FROM etf_holdings WHERE etf=?", (etf,))
-            frame.assign(etf=etf, retrieved=today).to_sql(
-                "etf_holdings", con, if_exists="append", index=False, method="multi"
-            )
+        with self._lock:
+            with self._conn_pool.connection() as con:
+                con.execute("DELETE FROM etf_holdings WHERE etf=?", (etf,))
+                frame.assign(etf=etf, retrieved=today).to_sql(
+                    "etf_holdings", con, if_exists="append", index=False, method="multi"
+                )
         _LOGGER.info("Stored %d holdings for %s", len(frame), etf)
 
     def _load_etf_holdings(self, etf: str) -> pd.DataFrame:
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn_pool.connection() as con:
             df = pd.read_sql(
                 "SELECT constituent, weight FROM etf_holdings WHERE etf=?",
                 con,
@@ -817,7 +923,7 @@ class DataBackend:
         return df
 
     def _last_etf_update(self, etf: str) -> pd.Timestamp | None:
-        with sqlite3.connect(self.db_path) as con:
+        with self._conn_pool.connection() as con:
             cur = con.cursor()
             cur.execute(
                 "SELECT MAX(retrieved) FROM etf_holdings WHERE etf=?", (etf,)
@@ -840,18 +946,28 @@ class DataBackend:
         kind : str
             API endpoint type ("px" for prices, "fnd" for fundamentals)
         """
-        if kind == "px":
-            # Calculate minimum time between price API calls (0.8 seconds for 75/min)
-            cool = 60 / self.RATE_LIMIT_PX
-            since = time.time() - self._t_last_px
-        else:
-            # Calculate minimum time between fundamental API calls
-            cool = 60 / self.RATE_LIMIT_FND  
-            since = time.time() - self._t_last_fnd
+        with self._lock:
+            if kind == "px":
+                # Calculate minimum time between price API calls (0.8 seconds for 75/min)
+                cool = 60 / self.RATE_LIMIT_PX
+                since = time.time() - self._t_last_px
+            else:
+                # Calculate minimum time between fundamental API calls
+                cool = 60 / self.RATE_LIMIT_FND  
+                since = time.time() - self._t_last_fnd
+                
+            # If insufficient time has passed, sleep to respect rate limit
+            # Add 0-20% random jitter to prevent synchronized API bursts across threads
+            if since < cool:
+                wait_time = cool - since
+                jitter = wait_time * random.uniform(0, 0.2)
+                wait_time += jitter
+                if wait_time > 1:  # Only log significant waits to avoid spam
+                    _LOGGER.info("Rate limiting: waiting %.1f seconds...", wait_time)
+                time.sleep(wait_time)
             
-        # If insufficient time has passed, sleep to respect rate limit
-        if since < cool:
-            wait_time = cool - since
-            if wait_time > 1:  # Only log significant waits to avoid spam
-                _LOGGER.info("Rate limiting: waiting %.1f seconds...", wait_time)
-            time.sleep(wait_time)
+            # Update timestamp to reserve this slot immediately so other threads wait
+            if kind == "px":
+                self._t_last_px = time.time()
+            else:
+                self._t_last_fnd = time.time()

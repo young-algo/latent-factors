@@ -1,21 +1,75 @@
 [project]
 name = "equity-factors"
 version = "0.1.0"
-description = "Add your description here"
+description = "Quantitative factor discovery and trading signal generation system with LLM-powered factor naming"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["quantitative", "finance", "factors", "trading", "backtesting", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
     "jupyter>=1.1.1",
+    "litellm[proxy]>=1.81.6",
     "lxml>=6.0.0",
     "matplotlib>=3.10.3",
     "openai>=1.0.0",
     "pandas>=2.3.0",
+    "pytest>=9.0.1",
     "python-dotenv>=1.0.0",
     "ratelimit>=2.2.1",
     "requests>=2.32.4",
     "scikit-learn>=1.7.0",
     "scipy>=1.16.0",
     "seaborn>=0.13.2",
+    "statsmodels>=0.14.5",
+    "streamlit>=1.51.0",
     "torch>=2.7.1",
     "yfinance>=0.2.63",
+    "hmmlearn>=0.3.0",
 ]
+
+[project.scripts]
+equity-factors = "src.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/username/equity-factors"
+Repository = "https://github.com/username/equity-factors"
+Documentation = "https://github.com/username/equity-factors#readme"
+
+[dependency-groups]
+dev = [
+    "litellm>=1.81.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''

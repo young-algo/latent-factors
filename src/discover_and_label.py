@@ -113,7 +113,7 @@ Examples
 >>> $ python discover_and_label.py --symbols "SPY" --method PCA --k 5
 
 Notes
-----
+-----
 - This is the main entry point for the factor discovery workflow
 - Integrates all components: data, factor discovery, validation, naming
 - Designed primarily as a CLI tool, not for programmatic import
@@ -130,9 +130,9 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from research import FactorResearchSystem          # existing data backend
-from latent_factors import statistical_factors, autoencoder_factors, StatMethod, validate_factor_distinctiveness
-from factor_labeler import ask_llm
+from .research import FactorResearchSystem          # existing data backend
+from .latent_factors import statistical_factors, autoencoder_factors, StatMethod, validate_factor_distinctiveness
+from .factor_labeler import ask_llm
 
 
 # ----------------------------- CLI ----------------------------- #
@@ -222,123 +222,27 @@ def _parse() -> argparse.Namespace:
     return p.parse_args()
 
 
-def main():
+def run_discovery(symbols: str, start_date: str = "2020-04-01", 
+                  method: str = "PCA", k: int = 10, rolling: int = 0, 
+                  name_out: str = "factor_names.csv"):
     """
-    Execute the complete factor discovery and naming workflow.
+    Execute the complete factor discovery and naming workflow programmatically.
     
-    This is the main orchestration function that coordinates all aspects of
-    the factor discovery pipeline: argument parsing, data loading, factor
-    discovery, validation, LLM naming, and results export.
-    
-    Workflow Execution Steps
-    -----------------------
-    
-    **1. Initialization & Configuration**
-    - Parse command-line arguments
-    - Set up logging configuration
-    - Load API keys from environment variables
-    - Validate required dependencies
-    
-    **2. Data Collection & Preprocessing** 
-    - Initialize FactorResearchSystem with API credentials
-    - Resolve symbol universe (handle ETF expansion)
-    - Load historical price data with caching
-    - Calculate returns and validate data quality
-    
-    **3. Factor Discovery**
-    - Apply selected factor discovery method:
-      * Static analysis: Fit factors on entire period
-      * Rolling analysis: Fit factors in rolling windows
-    - Extract factor returns and loadings matrices
-    - Handle different methods (PCA, ICA, NMF, Autoencoder)
-    
-    **4. Factor Validation**
-    - Run comprehensive factor quality checks
-    - Analyze factor correlations and distinctiveness
-    - Check for realistic volatility and return patterns
-    - Validate factor loading distributions
-    - Log warnings and recommendations for issues
-    
-    **5. LLM-Powered Factor Naming**
-    - Load fundamental data for factor context
-    - Identify top positive and negative stock exposures
-    - Generate LLM prompts with rich fundamental context
-    - Call OpenAI API to generate factor names
-    - Log factor names and descriptions
-    
-    **6. Results Export & Visualization**
-    - Export factor names to CSV file
-    - Generate cumulative factor returns chart
-    - Display final summary and validation results
-    
-    Error Handling
-    -------------
-    The workflow includes comprehensive error handling for:
-    - **Missing API Keys**: Clear error messages with setup instructions
-    - **Data Issues**: Robust handling of missing/invalid data
-    - **Factor Quality**: Automatic validation with actionable feedback
-    - **API Failures**: Graceful degradation and retry mechanisms
-    - **File I/O**: Proper error handling for output operations
-    
-    Performance Characteristics
-    --------------------------
-    Execution time depends on several factors:
-    - **Universe Size**: 50 stocks (~2 min), 500 stocks (~15 min)
-    - **Time Period**: Longer histories increase processing time
-    - **Method Choice**: Statistical methods faster than autoencoders
-    - **API Latency**: Data loading and LLM naming add network overhead
-    - **Rolling Windows**: Significantly increase computation time
-    
-    Output Artifacts
-    ---------------
-    - **factor_names.csv**: Factor names and descriptions
-    - **Console Output**: Detailed logging of workflow progress
-    - **Matplotlib Chart**: Cumulative factor returns visualization
-    - **Validation Report**: Factor quality assessment results
-    
-    Environment Dependencies
-    -----------------------
-    Required environment variables:
-    - **ALPHAVANTAGE_API_KEY**: For financial data access
-    - **OPENAI_API_KEY**: For factor naming via LLM
-    
-    Required Python packages:
-    - pandas, numpy, matplotlib (core data processing)
-    - openai (LLM integration)
-    - python-dotenv (environment management)
-    
-    Raises
-    ------
-    ValueError
-        If required environment variables are missing
-    RuntimeError
-        If factor discovery or validation fails
-    ConnectionError
-        If API calls fail after retries
-    
-    Examples
-    --------
-    >>> # Typical execution (called automatically from CLI)
-    >>> if __name__ == "__main__":
-    ...     main()
-    
-    >>> # The function orchestrates this workflow:
-    >>> # 1. Parse args: --symbols "SPY" --method PCA --k 5
-    >>> # 2. Load data: SPY constituents + price history
-    >>> # 3. Discover factors: 5 PCA factors from returns
-    >>> # 4. Validate: Check factor quality and distinctiveness  
-    >>> # 5. Name factors: Generate meaningful names via LLM
-    >>> # 6. Export: Save factor_names.csv + show chart
-    
-    Notes
-    -----
-    - This function is designed to be called from command line
-    - All configuration is handled via command-line arguments
-    - Progress is logged to console for monitoring long-running jobs
-    - The workflow includes extensive validation to catch common issues
-    - Results are immediately available for analysis after completion
+    Parameters
+    ----------
+    symbols : str
+        Comma-separated list of tickers/ETFs (e.g. "SPY,QQQ")
+    start_date : str, default "2020-04-01"
+        Start date for analysis (YYYY-MM-DD)
+    method : str, default "PCA"
+        Factor discovery method: "PCA", "ICA", "NMF", "AE"
+    k : int, default 10
+        Number of factors to extract
+    rolling : int, default 0
+        Rolling window size in days (0 for static analysis)
+    name_out : str, default "factor_names.csv"
+        Output path for factor names CSV
     """
-    args = _parse()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s  %(levelname)s  %(message)s")
 
@@ -348,16 +252,24 @@ def main():
     if not api_key:
         raise ValueError("ALPHAVANTAGE_API_KEY environment variable is required")
 
-    symbols = [s.strip().upper() for s in args.symbols.split(",")]
-    frs = FactorResearchSystem(api_key, universe=symbols, start_date=args.start)
-    prices = frs.get_prices(frs._resolve_symbols(symbols))
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    frs = FactorResearchSystem(api_key, universe=symbol_list, start_date=start_date)
+    prices = frs.get_prices(frs._resolve_symbols(symbol_list))
     returns = prices.pct_change().dropna()
 
-    if args.rolling > 0:
+    # Create a dummy args object to pass to _fit (preserving existing logic)
+    class Args:
+        pass
+    args = Args()
+    args.method = method
+    args.k = k
+    args.rolling = rolling
+
+    if rolling > 0:
         # simple: fit new factors every R days, keep latest loadings for naming
         fac_frames, load_frames = [], []
-        for t in range(args.rolling, len(returns), args.rolling):
-            sub = returns.iloc[t - args.rolling:t]
+        for t in range(rolling, len(returns), rolling):
+            sub = returns.iloc[t - rolling:t]
             fac, load = _fit(sub, args)
             fac_frames.append(fac)
             load_frames.append(load)
@@ -381,7 +293,13 @@ def main():
         logging.info("✅ Factor validation passed")
 
     # ------------------- LLM naming -------------------- #
-    fundamentals = frs.get_fundamentals(loadings.index.tolist())
+    fundamental_fields = [
+        "Sector", "MarketCapitalization", "PERatio", "DividendYield",
+        "PriceToSalesRatioTTM", "PriceToBookRatio", "ForwardPE", "ProfitMargin", 
+        "ReturnOnEquityTTM", "QuarterlyEarningsGrowthYOY", "Beta", 
+        "OperatingMarginTTM", "PercentInstitutions"
+    ]
+    fundamentals = frs.get_fundamentals(loadings.index.tolist(), fields=fundamental_fields)
     names = {}
     for f in loadings.columns:
         top = loadings[f].nlargest(10).index.tolist()
@@ -390,18 +308,24 @@ def main():
         names[f] = label
         logging.info("Factor %s →  %s", f, label)
 
-    pd.Series(names).to_csv(args.name_out)
-    logging.info("Saved factor names → %s", args.name_out)
+    pd.Series(names).to_csv(name_out)
+    logging.info("Saved factor names → %s", name_out)
+    
+    # Save factor returns and loadings for analysis
+    factor_ret.to_csv('factor_returns.csv')
+    loadings.to_csv('factor_loadings.csv')
+    logging.info("Saved factor returns → factor_returns.csv")
+    logging.info("Saved factor loadings → factor_loadings.csv")
     
     # Save configuration for analysis scripts
     config = {
-        'symbols': args.symbols,
-        'method': args.method,
-        'k': args.k,
-        'start_date': args.start,
-        'rolling': args.rolling,
+        'symbols': symbols,
+        'method': method,
+        'k': k,
+        'start_date': start_date,
+        'rolling': rolling,
         'resolved_symbols': len(loadings.index),
-        'factor_names_file': args.name_out
+        'factor_names_file': name_out
     }
     
     import json
@@ -410,13 +334,28 @@ def main():
     logging.info("Saved analysis configuration → factor_analysis_config.json")
 
     # quick visual - filter to start date
-    chart_data = factor_ret[factor_ret.index >= args.start] if len(factor_ret) > 0 else factor_ret
+    chart_data = factor_ret[factor_ret.index >= start_date] if len(factor_ret) > 0 else factor_ret
     (chart_data.cumsum() * 100).plot(figsize=(10, 6), lw=1)
-    plt.title(f"Cumulative latent factor returns (bps) from {args.start}")
+    plt.title(f"Cumulative latent factor returns (bps) from {start_date}")
     plt.tight_layout()
     plt.savefig('cumulative_factor_returns.png', dpi=150, bbox_inches='tight')
     plt.close()
     print("📊 Factor returns chart saved to cumulative_factor_returns.png")
+
+
+def main():
+    """
+    Entry point for legacy script execution.
+    """
+    args = _parse()
+    run_discovery(
+        symbols=args.symbols,
+        start_date=args.start,
+        method=args.method,
+        k=args.k,
+        rolling=args.rolling,
+        name_out=args.name_out
+    )
 
 
 def _fit(ret: pd.DataFrame, args: argparse.Namespace):

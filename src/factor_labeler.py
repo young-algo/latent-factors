@@ -64,7 +64,7 @@ Requirements
 -----------
 - **Environment**: OPENAI_API_KEY environment variable
 - **API Access**: OpenAI API account with sufficient credits
-- **Models**: Compatible with gpt-4o-mini, gpt-4o, gpt-3.5-turbo
+- **Models**: Compatible with gpt-5.2-mini, gpt-5.2, gpt-5.2-pro
 - **Data**: Fundamental data with sector, market cap, financial ratios
 
 Performance Characteristics
@@ -94,12 +94,17 @@ Notes
 - Critical component for making factor models interpretable and actionable
 """
 
-import os, textwrap, logging, time
+import os, textwrap, logging, time, json
 from typing import List, Dict, Sequence, Optional
 
 from openai import OpenAI
 import pandas as pd
 from dotenv import load_dotenv
+
+from .factor_naming import (
+    FactorName, generate_name_prompt, parse_name_response,
+    validate_name, score_quality, detect_tags, generate_quality_report
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -228,189 +233,293 @@ def ask_llm(factor_id: str,
             top_pos: Sequence[str],
             top_neg: Sequence[str],
             fundamentals: pd.DataFrame,
-            temperature: float = 0.7,
-            max_tokens: int = 100,
-            model: str = "gpt-4o-mini",
-            max_retries: int = 3) -> str:
+            sector_analysis: Optional[Dict] = None,
+            existing_names: Optional[List[str]] = None,
+            temperature: float = 0.4,
+            max_tokens: int = 200,
+            model: str = "gpt-5.2-mini",
+            max_retries: int = 3) -> FactorName:
     """
-    Return a concise factor label + rationale with comprehensive error handling.
-    
+    Generate structured factor name using LLM with comprehensive error handling.
+
     Parameters
     ----------
     factor_id : str
         Factor identifier
-    top_pos : Sequence[str] 
+    top_pos : Sequence[str]
         Tickers with highest positive exposures
     top_neg : Sequence[str]
-        Tickers with highest negative exposures  
+        Tickers with highest negative exposures
     fundamentals : pd.DataFrame
         Fundamental data for context
-    temperature : float, default 0.7
-        LLM temperature parameter
-    max_tokens : int, default 100
-        Maximum tokens in response (increased from 60)
-    model : str, default "gpt-4o-mini"
+    sector_analysis : Optional[Dict]
+        Sector composition analysis
+    existing_names : Optional[List[str]]
+        Other factor names to avoid similarity with
+    temperature : float, default 0.4
+        LLM temperature parameter (lower for more consistent output)
+    max_tokens : int, default 200
+        Maximum tokens in response (JSON needs more space)
+    model : str, default "gpt-5.2-mini"
         OpenAI model to use
     max_retries : int, default 3
         Maximum retry attempts for API calls
-        
+
     Returns
     -------
-    str
-        Factor label and explanation, or fallback name if API fails
+    FactorName
+        Structured factor name with metadata, or fallback if API fails
     """
     if client is None:
         _LOG.error("OpenAI API key not set. Set OPENAI_API_KEY environment variable.")
-        return f"{factor_id}: API key not available"
-    
+        return FactorName(
+            short_name=f"{factor_id}: Unnamed",
+            description="API key not available",
+            confidence="low"
+        )
+
     # Input validation
     if not top_pos and not top_neg:
         _LOG.warning("No tickers provided for factor %s", factor_id)
-        return f"{factor_id}: No exposures available"
-    
+        return FactorName(
+            short_name=f"{factor_id}: No Exposures",
+            description="No stock exposures available",
+            confidence="low"
+        )
+
     try:
-        # Build context with error handling
-        pos_desc = _summarise_group(top_pos, fundamentals) if top_pos else "No positive exposures"
-        neg_desc = _summarise_group(top_neg, fundamentals) if top_neg else "No negative exposures"
+        # Build sector analysis from fundamentals if not provided
+        if sector_analysis is None and not fundamentals.empty:
+            sector_analysis = _build_sector_analysis(top_pos, top_neg, fundamentals)
 
-        sys_msg = textwrap.dedent("""
-        You are a seasoned equity strategist creating distinct factor names.
-        
-        CRITICAL: Avoid generic terms like "Beta", "Finance", "Dynamics", "Balance", "Divergence".
-        Instead, focus on the SPECIFIC economic theme that differentiates the high vs low exposure stocks.
-        
-        Examples of GOOD names:
-        - "Tech Giants vs Cyclicals" (if mega-cap tech vs industrial stocks)
-        - "Growth vs Value" (if high P/E vs low P/E stocks)  
-        - "Dividend Aristocrats" (if high dividend stocks)
-        - "Small Cap Momentum" (if small growth stocks)
-        - "REIT vs Industrials" (if real estate vs manufacturing)
-        
-        Focus on: sector differences, size differences, growth vs value, business models, economic sensitivity.
-        """).strip()
-
-        user_msg = textwrap.dedent(f"""
-        Analyze this factor's stock exposures:
-
-        HIGH EXPOSURE STOCKS: {', '.join(top_pos[:8])}
-        Characteristics: {pos_desc}
-
-        LOW EXPOSURE STOCKS: {', '.join(top_neg[:8])}  
-        Characteristics: {neg_desc}
-
-        What economic theme distinguishes these two groups? 
-        
-        Respond with: **Factor Name** (2-4 words): One sentence explanation focusing on the key economic difference.
-        
-        Avoid generic financial terms. Be specific about what makes these groups different.
-        """).strip()
+        # Generate structured prompt
+        prompt = generate_name_prompt(
+            factor_code=factor_id,
+            top_stocks=list(top_pos[:10]),
+            bottom_stocks=list(top_neg[:10]),
+            sector_analysis=sector_analysis,
+            existing_names=existing_names
+        )
 
         # Retry logic with exponential backoff
         last_error = None
         for attempt in range(max_retries):
             try:
-                _LOG.debug("Requesting factor name for %s (attempt %d/%d)", factor_id, attempt + 1, max_retries)
-                
+                _LOG.debug("Requesting factor name for %s (attempt %d/%d)",
+                          factor_id, attempt + 1, max_retries)
+
                 # Rate limiting - simple delay between requests
                 if attempt > 0:
                     delay = min(2 ** attempt, 30)  # Exponential backoff, max 30 seconds
                     _LOG.info("Retrying after %d seconds...", delay)
                     time.sleep(delay)
-                
+
                 rsp = client.chat.completions.create(
                     model=model,
-                    messages=[{"role": "system", "content": sys_msg},
-                              {"role": "user", "content": user_msg}],
+                    messages=[
+                        {"role": "system", "content": "You are a quantitative finance expert. Respond only with valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=30  # Add timeout
+                    timeout=30,
+                    response_format={"type": "json_object"}  # Enforce JSON output
                 )
-                
+
                 # Validate response
                 if not rsp.choices or not rsp.choices[0].message.content:
                     raise ValueError("Empty response from OpenAI API")
-                
+
                 content = rsp.choices[0].message.content.strip()
                 if not content:
                     raise ValueError("Empty content in OpenAI response")
-                
-                _LOG.debug("Successfully received factor name for %s", factor_id)
-                return content
-                
+
+                # Parse JSON response into FactorName
+                factor_name = parse_name_response(content)
+                factor_name.tags = detect_tags(factor_name)
+
+                # Score quality
+                factor_name.quality_score = score_quality(factor_name, existing_names)
+
+                _LOG.debug("Successfully generated factor name for %s (score: %.1f)",
+                          factor_id, factor_name.quality_score)
+                return factor_name
+
             except Exception as e:
                 last_error = e
-                _LOG.warning("API call failed for %s (attempt %d/%d): %s", 
+                _LOG.warning("API call failed for %s (attempt %d/%d): %s",
                            factor_id, attempt + 1, max_retries, str(e))
-                
+
                 # Don't retry on certain errors
                 if "api_key" in str(e).lower() or "authentication" in str(e).lower():
                     break
-                    
+
                 continue
-        
-        # All retries failed
-        _LOG.error("All retry attempts failed for factor %s. Last error: %s", factor_id, str(last_error))
-        return f"{factor_id}: Naming failed after {max_retries} attempts"
-        
+
+        # All retries failed - return fallback
+        _LOG.error("All retry attempts failed for factor %s. Last error: %s",
+                   factor_id, str(last_error))
+        return _generate_fallback_name(factor_id, top_pos, top_neg, sector_analysis)
+
     except Exception as e:
         _LOG.error("Unexpected error in ask_llm for factor %s: %s", factor_id, str(e))
-        return f"{factor_id}: Unexpected error during naming"
+        return _generate_fallback_name(factor_id, top_pos, top_neg, sector_analysis)
+
+
+def _build_sector_analysis(top_pos: Sequence[str],
+                           top_neg: Sequence[str],
+                           fundamentals: pd.DataFrame) -> Dict:
+    """Build sector composition analysis from fundamentals."""
+    analysis = {'top_sectors': [], 'bottom_sectors': []}
+
+    try:
+        if fundamentals.empty or "Sector" not in fundamentals.columns:
+            return analysis
+
+        # Analyze high exposure stocks
+        valid_pos = [t for t in top_pos if t in fundamentals.index]
+        if valid_pos:
+            pos_sectors = fundamentals.loc[valid_pos, "Sector"].value_counts()
+            for sector, count in pos_sectors.head(3).items():
+                avg_loading = 0.5  # Placeholder
+                analysis['top_sectors'].append({
+                    'sector': sector,
+                    'count': count,
+                    'avg_loading': avg_loading
+                })
+
+        # Analyze low exposure stocks
+        valid_neg = [t for t in top_neg if t in fundamentals.index]
+        if valid_neg:
+            neg_sectors = fundamentals.loc[valid_neg, "Sector"].value_counts()
+            for sector, count in neg_sectors.head(3).items():
+                analysis['bottom_sectors'].append({
+                    'sector': sector,
+                    'count': count
+                })
+
+    except Exception as e:
+        _LOG.warning("Error building sector analysis: %s", str(e))
+
+    return analysis
+
+
+def _generate_fallback_name(factor_id: str,
+                            top_pos: Sequence[str],
+                            top_neg: Sequence[str],
+                            sector_analysis: Optional[Dict] = None) -> FactorName:
+    """Generate rule-based fallback name when LLM fails."""
+
+    # Try sector-based naming
+    if sector_analysis and sector_analysis.get('top_sectors'):
+        top_sector = sector_analysis['top_sectors'][0]['sector']
+
+        # Check if top and bottom are different sectors
+        bottom_sectors = sector_analysis.get('bottom_sectors', [])
+        if bottom_sectors and bottom_sectors[0]['sector'] != top_sector:
+            bottom_sector = bottom_sectors[0]['sector']
+            return FactorName(
+                short_name=f"{top_sector} vs {bottom_sector}",
+                description=f"Factor distinguishing {top_sector} from {bottom_sector}",
+                theme="Sector Rotation",
+                confidence="low",
+                tags=["sector"]
+            )
+        else:
+            return FactorName(
+                short_name=f"{top_sector} Exposure",
+                description=f"Stocks with high {top_sector} sector exposure",
+                theme="Sector Concentration",
+                confidence="low",
+                tags=["sector"]
+            )
+
+    # Size-based fallback
+    if top_pos and top_neg:
+        return FactorName(
+            short_name=f"{factor_id}: Factor",
+            description=f"Factor with {len(top_pos)} positive and {len(top_neg)} negative exposures",
+            confidence="low"
+        )
+
+    return FactorName(
+        short_name=f"{factor_id}: Unnamed",
+        description="Unable to generate name",
+        confidence="low"
+    )
 
 
 def batch_name_factors(factor_exposures: pd.DataFrame,
                       fundamentals: pd.DataFrame,
-                      top_n: int = 8,
-                      **llm_kwargs) -> Dict[str, str]:
+                      top_n: int = 10,
+                      **llm_kwargs) -> Dict[str, FactorName]:
     """
     Name multiple factors with rate limiting and progress tracking.
-    
+
     Parameters
     ----------
     factor_exposures : pd.DataFrame
         Factor exposures matrix (tickers x factors)
-    fundamentals : pd.DataFrame  
+    fundamentals : pd.DataFrame
         Fundamental data for context
-    top_n : int, default 8
+    top_n : int, default 10
         Number of top/bottom stocks to consider
     **llm_kwargs
         Additional arguments passed to ask_llm
-        
+
     Returns
     -------
-    Dict[str, str]
-        Dictionary mapping factor names to descriptions
+    Dict[str, FactorName]
+        Dictionary mapping factor IDs to FactorName objects
     """
     if factor_exposures.empty:
         _LOG.warning("Empty factor exposures provided")
         return {}
-    
+
     factor_names = {}
     total_factors = len(factor_exposures.columns)
-    
+    named_so_far = []  # Track names for distinctiveness scoring
+
     _LOG.info("Starting batch naming of %d factors", total_factors)
-    
+
     for i, factor_id in enumerate(factor_exposures.columns, 1):
         try:
             _LOG.info("Naming factor %d/%d: %s", i, total_factors, factor_id)
-            
+
             exposures = factor_exposures[factor_id]
             top_pos = exposures.nlargest(top_n).index.tolist()
             top_neg = exposures.nsmallest(top_n).index.tolist()
-            
-            name = ask_llm(factor_id, top_pos, top_neg, fundamentals, **llm_kwargs)
-            factor_names[factor_id] = name
-            
+
+            # Build sector analysis
+            sector_analysis = _build_sector_analysis(top_pos, top_neg, fundamentals)
+
+            # Generate name with distinctiveness context
+            factor_name = ask_llm(
+                factor_id, top_pos, top_neg, fundamentals,
+                sector_analysis=sector_analysis,
+                existing_names=named_so_far.copy(),
+                **llm_kwargs
+            )
+
+            factor_names[factor_id] = factor_name
+            named_so_far.append(factor_name.short_name)
+
             # Simple rate limiting between requests
             if i < total_factors:  # Don't sleep after last request
-                time.sleep(1)  # 1 second between requests
-                
+                time.sleep(0.5)  # Reduced delay for JSON responses
+
         except Exception as e:
             _LOG.error("Failed to name factor %s: %s", factor_id, str(e))
-            factor_names[factor_id] = f"{factor_id}: Naming failed"
-    
-    _LOG.info("Completed batch naming: %d/%d factors successfully named", 
-             len([v for v in factor_names.values() if "failed" not in v.lower()]), total_factors)
-    
+            factor_names[factor_id] = _generate_fallback_name(factor_id, [], [], None)
+
+    # Generate and log quality report
+    report = generate_quality_report(factor_names)
+    _LOG.info("\n%s", report)
+
+    successful = len([v for v in factor_names.values() if v.quality_score > 30])
+    _LOG.info("Completed batch naming: %d/%d factors with acceptable quality",
+              successful, total_factors)
+
     return factor_names
 
 
@@ -430,7 +539,7 @@ def validate_api_key() -> bool:
         # Simple test call to validate key
         test_client = OpenAI(api_key=openai_api_key)
         test_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-mini",
             messages=[{"role": "user", "content": "test"}],
             max_tokens=1
         )
