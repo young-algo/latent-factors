@@ -43,6 +43,8 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
+import pandas as pd
+
 # Import centralized config first to ensure environment is set up
 from src.config import config, validate_config
 
@@ -455,6 +457,133 @@ def cmd_clean(args):
         print("  - factor_cache_*.pkl (Factor computation cache)")
 
 
+def cmd_optimize(args):
+    """Optimize factor weights for maximum Sharpe ratio."""
+    print("=" * 70)
+    print("🎯 FACTOR WEIGHT OPTIMIZATION")
+    print("=" * 70)
+    
+    from src.factor_optimization import SharpeOptimizer
+    from src.research import FactorResearchSystem
+    import json
+    
+    # Load or generate factors
+    print(f"\n📊 Loading factor data for universe: {', '.join(args.universe)}")
+    
+    cache_file = f"factor_cache_{'_'.join(args.universe)}_fundamental.pkl"
+    
+    if Path(cache_file).exists():
+        print(f"📂 Loading cached factors from {cache_file}")
+        import pickle
+        with open(cache_file, 'rb') as f:
+            frs, factor_returns, factor_loadings = pickle.load(f)
+    else:
+        print("🔍 Generating factors (this may take a while)...")
+        frs = FactorResearchSystem(
+            get_api_key(),
+            universe=args.universe,
+            factor_method='fundamental',
+            n_components=8,
+            expand_etfs=True
+        )
+        frs.fit_factors()
+        factor_returns = frs.get_factor_returns()
+        factor_loadings = frs._expos
+        
+        # Cache results
+        import pickle
+        with open(cache_file, 'wb') as f:
+            pickle.dump((frs, factor_returns, factor_loadings), f)
+    
+    print(f"   Factor returns shape: {factor_returns.shape}")
+    print(f"   Factor loadings shape: {factor_loadings.shape}")
+    
+    # Initialize optimizer
+    optimizer = SharpeOptimizer(factor_returns, factor_loadings)
+    
+    if args.walk_forward:
+        print(f"\n🔄 Running walk-forward optimization...")
+        print(f"   Training window: {args.train_window} days")
+        print(f"   Test window: {args.test_window} days")
+        print(f"   Methods: {', '.join(args.methods)}")
+        print(f"   Technique: {args.technique}")
+        
+        results = optimizer.walk_forward_optimize(
+            train_window=args.train_window,
+            test_window=args.test_window,
+            methods=args.methods,
+            technique=args.technique,
+            verbose=True
+        )
+        
+        print(f"\n📈 Walk-Forward Results Summary:")
+        print(f"   Number of periods: {len(results)}")
+        print(f"   Average train Sharpe: {results['train_sharpe'].mean():.2f}")
+        print(f"   Average test Sharpe: {results['test_sharpe'].mean():.2f}")
+        
+        # Save results
+        if args.output:
+            results.to_json(args.output, orient='records', date_format='iso')
+            print(f"\n💾 Results saved to: {args.output}")
+    
+    else:
+        print(f"\n⚙️  Running single-period optimization...")
+        print(f"   Lookback: {args.lookback} days")
+        print(f"   Methods: {', '.join(args.methods)}")
+        print(f"   Technique: {args.technique}")
+        
+        result = optimizer.optimize_blend(
+            lookback=args.lookback,
+            methods=args.methods,
+            technique=args.technique
+        )
+        
+        print("\n" + "=" * 70)
+        print("OPTIMIZATION RESULTS")
+        print("=" * 70)
+        
+        print(f"\n📊 Performance Metrics:")
+        print(f"   Sharpe Ratio:         {result.sharpe_ratio:.2f}")
+        print(f"   Annualized Return:    {result.annualized_return:.2%}")
+        print(f"   Annualized Volatility:{result.annualized_volatility:.2%}")
+        
+        print(f"\n🔧 Optimal Method Blend:")
+        for method, weight in sorted(result.method_allocation.items(), key=lambda x: -x[1]):
+            if weight > 0.01:
+                bar = "█" * int(weight * 50)
+                print(f"   {method:<20} {weight:>6.1%} {bar}")
+        
+        print(f"\n📈 Optimal Factor Weights:")
+        for factor, weight in sorted(result.optimal_weights.items(), key=lambda x: -x[1]):
+            bar = "█" * int(weight * 50)
+            print(f"   {factor:<20} {weight:>6.1%} {bar}")
+        
+        # Export weights
+        if args.export_weights:
+            weights_df = pd.DataFrame({
+                'factor': list(result.optimal_weights.keys()),
+                'weight': list(result.optimal_weights.values())
+            })
+            weights_df.to_csv(args.export_weights, index=False)
+            print(f"\n💾 Weights exported to: {args.export_weights}")
+        
+        # Save full results
+        if args.output:
+            output_data = {
+                'optimal_weights': result.optimal_weights,
+                'method_allocation': result.method_allocation,
+                'sharpe_ratio': result.sharpe_ratio,
+                'annualized_return': result.annualized_return,
+                'annualized_volatility': result.annualized_volatility,
+                'lookback': args.lookback,
+                'methods': args.methods,
+                'technique': args.technique
+            }
+            with open(args.output, 'w') as f:
+                json.dump(output_data, f, indent=2)
+            print(f"💾 Full results saved to: {args.output}")
+
+
 def cmd_version(args):
     """Print version information."""
     from src import __version__, get_version
@@ -821,6 +950,64 @@ For more help on a specific command:
         help='Delete all cache files'
     )
     
+    # -------------------------------------------------------------------------
+    # Optimize command (SharpeOptimizer)
+    # -------------------------------------------------------------------------
+    optimize_parser = subparsers.add_parser(
+        'optimize',
+        help='Optimize factor weights for maximum Sharpe ratio',
+        description='Find optimal blended factor weights using various optimization techniques'
+    )
+    optimize_parser.add_argument(
+        '--universe',
+        nargs='+',
+        default=['SPY'],
+        help='Stock/ETF universe for factor data'
+    )
+    optimize_parser.add_argument(
+        '--lookback',
+        type=int,
+        default=126,
+        help='Lookback window in days for optimization (default: 126)'
+    )
+    optimize_parser.add_argument(
+        '--methods',
+        nargs='+',
+        default=['sharpe', 'momentum', 'risk_parity'],
+        help='Methods to blend (default: sharpe momentum risk_parity)'
+    )
+    optimize_parser.add_argument(
+        '--technique',
+        choices=['gradient', 'differential', 'bayesian'],
+        default='differential',
+        help='Optimization technique (default: differential)'
+    )
+    optimize_parser.add_argument(
+        '--walk-forward',
+        action='store_true',
+        help='Use walk-forward optimization instead of single-period'
+    )
+    optimize_parser.add_argument(
+        '--train-window',
+        type=int,
+        default=126,
+        help='Training window for walk-forward (default: 126)'
+    )
+    optimize_parser.add_argument(
+        '--test-window',
+        type=int,
+        default=21,
+        help='Test window for walk-forward (default: 21)'
+    )
+    optimize_parser.add_argument(
+        '--output',
+        help='Save results to JSON file'
+    )
+    optimize_parser.add_argument(
+        '--export-weights',
+        help='Export optimal weights to CSV for use in trading'
+    )
+    
     return parser
 
 
@@ -847,6 +1034,7 @@ def main():
         'clean': cmd_clean,
         'regime': lambda args: cmd_regime_detect(args) if args.regime_command == 'detect' else None,
         'backtest': cmd_backtest,
+        'optimize': cmd_optimize,
     }
     
     # Handle signals subcommands
