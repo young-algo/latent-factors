@@ -1,11 +1,30 @@
 # Equity Factors Research System
 
-A comprehensive quantitative finance research platform for factor discovery, analysis, and backtesting. This system combines market data acquisition, factor modeling, and performance evaluation with innovative LLM-powered factor naming. Designed for active traders who want to understand what's *actually* driving returns in their portfolios.
+A comprehensive quantitative finance research platform for factor discovery, optimization, and backtesting. This system combines market data acquisition, factor modeling, and performance evaluation with innovative LLM-powered factor naming. Designed for active traders who want to understand what's *actually* driving returns in their portfolios and translate factor insights into tradeable stock baskets.
+
+## What's New
+
+### 🎯 Factor Weight Optimization
+Automatically find optimal factor blends that maximize Sharpe ratio using Bayesian optimization, with support for walk-forward validation to avoid overfitting.
+
+### 📊 Tradeable Basket Generation  
+Convert factor weights into specific long/short stock positions for immediate execution.
+
+### 🤖 LLM-Powered Factor Naming
+Automatically generate human-readable factor names during optimization to understand what each discovered factor represents.
+
+### 🗄️ Robust Database Architecture
+Complete re-architecture of SQLite handling eliminates "database is locked" errors with per-operation connections and automatic WAL migration.
+
+### 🔧 Unified CLI
+Single entry point for all functionality with consistent command structure.
 
 ## Overview
 
 This system helps active traders answer critical questions:
 - **What hidden factors are driving my universe?** (Factor Discovery)
+- **How should I optimally weight factors for maximum risk-adjusted return?** (Factor Optimization)
+- **Which specific stocks should I buy/sell to implement my factor view?** (Basket Generation)
 - **Is now a good time to buy/sell specific factors?** (Trading Signals)
 - **Which stocks should I long/short based on factor exposures?** (Cross-Sectional Analysis)
 - **What market regime are we in and how should I position?** (Regime Detection)
@@ -15,13 +34,15 @@ This system helps active traders answer critical questions:
 
 | Feature | What It Does | Why Traders Care |
 |---------|--------------|------------------|
-| **Factor Discovery** | Extracts latent factors using PCA, ICA, NMF, or Autoencoders | Understand the true drivers of returns in your universe beyond obvious sector ETFs |
-| **LLM Factor Naming** | Auto-generates intuitive names using GPT models | Transform cryptic "F3" into "Small-Cap Growth Momentum" for actionable insights |
-| **Trading Signals** | RSI, MACD, ADX, extreme value alerts, z-scores | Know when factors are overbought/oversold for entry/exit timing |
-| **Cross-Sectional Analysis** | Rank stocks by composite factor scores | Generate quantifiable long/short candidates from your universe |
+| **Factor Discovery** | Extracts latent factors using PCA, ICA, NMF, or Autoencoders | Understand the true drivers of returns beyond obvious sector ETFs |
+| **Factor Optimization** | Bayesian optimization of factor weight blends | Maximize Sharpe ratio with data-driven weightings |
+| **Basket Generation** | Convert factor weights to specific stock positions | Go from abstract factors to tradeable long/short baskets |
+| **LLM Factor Naming** | Auto-generates intuitive names using GPT models | Transform cryptic "F3" into "Small-Cap Growth Momentum" |
+| **Trading Signals** | RSI, MACD, ADX, extreme value alerts, z-scores | Time factor entries/exits with confidence |
+| **Cross-Sectional Analysis** | Rank stocks by composite factor scores | Generate quantifiable long/short candidates |
 | **Regime Detection** | HMM-based market state identification | Adjust factor exposure based on bull/bear/volatile conditions |
-| **Signal Backtesting** | Walk-forward testing with performance attribution | Validate your factor timing strategy before risking capital |
-| **Interactive Dashboard** | Streamlit UI for real-time monitoring | Visual factor monitoring without writing code |
+| **Signal Backtesting** | Walk-forward testing with performance attribution | Validate strategies before risking capital |
+| **Interactive Dashboard** | Streamlit UI for real-time monitoring | Visual factor monitoring without coding |
 
 ---
 
@@ -58,24 +79,43 @@ cp .env.example .env
 
 ## Usage Guide for Active Traders
 
+### 0. Unified CLI Quick Reference
+
+All functionality is accessible through the unified CLI:
+
+```bash
+# Main commands
+uv run python -m src discover      # Factor discovery and naming
+uv run python -m src optimize      # Factor weight optimization
+uv run python -m src basket        # Generate tradeable basket
+uv run python -m src signals       # Trading signals (extremes, momentum, cross-section)
+uv run python -m src regime        # Market regime detection
+uv run python -m src backtest      # Signal backtesting
+uv run python -m src dashboard     # Launch Streamlit dashboard
+uv run python -m src report        # Generate reports
+uv run python -m src clean         # Clean cache files
+
+# Get help for any command
+uv run python -m src <command> --help
+```
+
+---
+
 ### 1. Factor Discovery & Naming
 
 **What it does:** Automatically discovers latent factors in any ETF or stock universe and gives them meaningful names.
 
-**Why use it:** Traditional ETFs (XLK, XLF, etc.) tell you what sector a stock is in, but not what's *actually* driving returns. This reveals hidden patterns like "High Beta Disruptors" or "Defensive Dividend Growers."
+**Why use it:** Traditional ETFs (XLK, XLF, etc.) tell you what sector a stock is in, but not what's *actually* driving returns.
 
 ```bash
 # Discover factors in SPY using PCA
-uv run python src/discover_and_label.py -s "SPY" --method PCA -k 10
+uv run python -m src discover --symbols SPY --method PCA -k 10
 
-# Analyze tech sector with 10 factors
-uv run python src/discover_and_label.py -s "XLK" --method PCA -k 10
+# Analyze with ICA for regime-sensitive factors
+uv run python -m src discover --symbols SPY --method ICA -k 8
 
 # Multi-ETF analysis for broader factor discovery
-uv run python src/discover_and_label.py -s "SPY,QQQ,IWM" --method ICA -k 20
-
-# Use deep learning for non-linear factors (requires PyTorch)
-uv run python src/discover_and_label.py -s "ARKK" --method AE -k 5
+uv run python -m src discover --symbols "SPY,QQQ,IWM" --method PCA -k 12
 ```
 
 **Output:**
@@ -84,263 +124,214 @@ uv run python src/discover_and_label.py -s "ARKK" --method AE -k 5
 - `factor_loadings.csv` - Stock exposures to each factor
 - `cumulative_factor_returns.png` - Visual performance chart
 
-**Trading Application:**
-- Identify which factors are currently outperforming
-- Understand factor correlations to avoid concentration risk
-- Use factor returns as features in your own models
+---
+
+### 2. Factor Weight Optimization ⭐ NEW
+
+**What it does:** Finds the optimal blend of factors that maximizes Sharpe ratio using Bayesian optimization.
+
+**Why use it:** Instead of equal-weighting factors, let the data tell you which factors deserve higher/lower weights.
+
+```bash
+# Basic optimization with PCA factors
+uv run python -m src optimize --universe SPY \
+  --factor-method pca --n-components 10 \
+  --lookback 126 --technique bayesian \
+  --export-weights optimal_weights.csv \
+  --output optimization_results.json
+
+# Walk-forward optimization (more robust)
+uv run python -m src optimize --universe VTHR \
+  --factor-method ica --n-components 12 \
+  --walk-forward --train-window 90 --test-window 30 \
+  --technique bayesian \
+  --methods sharpe momentum risk_parity \
+  --export-weights vthr_weights.csv \
+  --output vthr_results.json
+
+# With factor naming (requires OPENAI_API_KEY)
+uv run python -m src optimize --universe SPY \
+  --factor-method pca --n-components 10 \
+  --name-factors --factor-names-output factor_names.csv \
+  --export-weights weights.csv --output results.json
+```
+
+**Available Factor Methods:**
+- `pca` - Principal Component Analysis (default, stable)
+- `ica` - Independent Component Analysis (good for regime detection)
+- `sparse_pca` - Sparse PCA (interpretable loadings)
+- `factor` - Factor Analysis (classical approach)
+- `fundamental` - Fama-French style (P/E, market cap, etc.)
+
+**Optimization Techniques:**
+- `bayesian` - Bayesian optimization with Optuna (recommended)
+- `differential` - Differential evolution (global search)
+- `gradient` - Gradient ascent (fast, may find local optima)
+
+**Weighting Methods for Blending:**
+- `sharpe` - Historical risk-adjusted returns
+- `momentum` - Recent performance persistence
+- `risk_parity` - Equal risk contribution
+- `min_variance` - Minimum variance weighting
+- `max_diversification` - Maximum diversification ratio
+- `equal` - Equal weighting
+
+**Output:**
+- `*_weights.csv` - Optimal factor weights
+- `*_results.json` - Full optimization results with performance metrics
+- `*_factor_names.csv` - Human-readable factor names (if --name-factors)
 
 ---
 
-### 2. Trading Signals CLI
+### 3. Generate Tradeable Basket ⭐ NEW
+
+**What it does:** Converts optimal factor weights into specific long/short stock positions.
+
+**Why use it:** Go from abstract factor allocations to concrete tradeable positions.
+
+```bash
+# Generate basket from optimization results
+uv run python -m src basket \
+  --results vthr_results.json \
+  --universe VTHR \
+  --factor-method pca \
+  --long-pct 0.05 \
+  --short-pct 0.05 \
+  --capital 100000 \
+  --net-exposure 1.0 \
+  -o trade_basket.csv
+```
+
+**How it works:**
+1. Takes optimal factor weights from optimization
+2. Calculates composite factor exposure for each stock
+3. Ranks stocks by composite score
+4. Selects top X% for longs, bottom X% for shorts
+5. Calculates position sizes based on target weights
+
+**Output (`trade_basket.csv`):**
+| ticker | composite_score | target_weight | side | position_dollars |
+|--------|----------------|---------------|------|-----------------|
+| AAPL | 0.0523 | 0.025 | LONG | $2,500 |
+| MSFT | 0.0489 | 0.023 | LONG | $2,300 |
+| ... | ... | ... | ... | ... |
+| XYZ | -0.0412 | -0.021 | SHORT | -$2,100 |
+
+**Parameters:**
+- `--long-pct 0.05` - Top 5% of stocks go long
+- `--short-pct 0.05` - Bottom 5% of stocks go short
+- `--capital 100000` - Total capital to allocate
+- `--net-exposure 1.0` - Net exposure (1.0 = 100% long, 0.0 = market neutral, -1.0 = 100% short)
+
+---
+
+### 4. Trading Signals
 
 **What it does:** Generates actionable buy/sell signals based on factor momentum, extreme values, and cross-sectional rankings.
 
-**Why use it:** Instead of guessing when to enter/exit, get data-driven signals with confidence scores.
-
 ```bash
-# Generate comprehensive trading signals
-uv run python src/signals_cli.py generate --universe SPY --method PCA --components 10
-
 # Check for extreme value alerts (mean reversion opportunities)
-uv run python src/signals_cli.py extremes --universe SPY --threshold 2.0 --trade
+uv run python -m src signals extremes --universe SPY --threshold 2.0 --trade
 
 # Analyze factor momentum (RSI, MACD, ADX)
-uv run python src/signals_cli.py momentum --universe SPY --factor F1
+uv run python -m src signals momentum --universe SPY --factor F1
 
 # Cross-sectional stock rankings (long/short candidates)
-uv run python src/signals_cli.py cross-section --universe SPY --top-pct 0.1 --bottom-pct 0.1
-
-# Detect market regime with allocation recommendations
-uv run python src/signals_cli.py regime --universe SPY --regimes 3 --predict 5
-
-# Backtest signals with walk-forward analysis
-uv run python src/signals_cli.py backtest --universe SPY --walks 10 --optimize
-
-# Generate HTML report
-uv run python src/signals_cli.py report --universe SPY --output report.html --open
-
-# Interactive factor naming
-uv run python src/signals_cli.py name-factors --universe SPY --interactive
+uv run python -m src signals cross-section --universe SPY --top-pct 0.1 --bottom-pct 0.1
 ```
 
-**Signal Types Explained:**
+**Signal Types:**
 
-| Signal Type | Best For | When to Use |
-|-------------|----------|-------------|
-| **Momentum (RSI)** | Timing mean reversion | RSI > 70 = overbought (consider short); RSI < 30 = oversold (consider long) |
-| **MACD Crossover** | Trend confirmation | Bullish crossover = enter long; Bearish = exit/short |
-| **ADX** | Trend strength | ADX > 25 = strong trend (follow); ADX < 20 = weak trend (mean revert) |
-| **Z-Score** | Statistical extremes | |z| > 2 = rare event, likely to revert |
-| **Percentile Rank** | Historical context | 95th+ percentile = extreme high; 5th- percentile = extreme low |
-
----
-
-### 3. Interactive Dashboard
-
-**What it does:** Real-time visual monitoring of factors, signals, and regimes through a web interface.
-
-**Why use it:** Get a trading desk view without writing any code. Monitor multiple factors simultaneously.
-
-```bash
-# Launch the Streamlit dashboard
-uv run python src/signals_cli.py dashboard
-```
-
-**Dashboard Sections:**
-- **Market Overview** - Factor count, date range, average returns, active alerts
-- **Signal Status Table** - Color-coded buy/sell signals with RSI/MACD/ADX
-- **Extreme Value Alerts** - Red/green alerts for statistical extremes
-- **Cumulative Returns** - Factor performance over time
-- **Factor Deep Dive** - Individual factor analysis with top exposures
-- **Stock Watchlist** - Factor exposure heatmap for selected stocks
-- **Regime Analysis** - Current market state and predictions
-
-**Trading Application:**
-- Morning pre-trade briefing: Check overnight signal changes
-- Intraday: Monitor factor momentum for timing
-- End of day: Review regime status for next-day positioning
-
----
-
-### 4. Cross-Sectional Analysis
-
-**What it does:** Ranks all stocks in your universe by composite factor scores to identify long/short candidates.
-
-**Why use it:** Instead of picking stocks based on gut feel, rank them quantitatively by factor exposures.
-
-```python
-from src.cross_sectional import CrossSectionalAnalyzer
-import pandas as pd
-
-# Load factor loadings
-loadings = pd.read_csv("factor_loadings.csv", index_col=0)
-
-# Initialize analyzer
-analyzer = CrossSectionalAnalyzer(loadings)
-
-# Calculate composite scores with custom weights
-weights = {'F1': 0.4, 'F2': 0.3, 'F3': 0.3}  # Overweight specific factors
-scores = analyzer.calculate_factor_scores(weights=weights)
-
-# Generate rankings
-rankings = analyzer.rank_universe(scores)
-
-# Get long/short signals
-signals = analyzer.generate_long_short_signals(top_pct=0.1, bottom_pct=0.1)
-
-# Filter for actionable signals
-longs = [s for s in signals if s.direction.value == 'long']
-shorts = [s for s in signals if s.direction.value == 'short']
-```
-
-**Trading Application:**
-- Build quant-style long/short portfolios
-- Identify factor tilts for existing positions
-- Screen universe for factor-based entry candidates
+| Signal | Best For | When to Use |
+|--------|----------|-------------|
+| **RSI** | Timing mean reversion | RSI > 70 = overbought; RSI < 30 = oversold |
+| **MACD** | Trend confirmation | Bullish crossover = enter long |
+| **ADX** | Trend strength | ADX > 25 = strong trend; ADX < 20 = weak trend |
+| **Z-Score** | Statistical extremes | \|z\| > 2 = rare event, likely to revert |
 
 ---
 
 ### 5. Market Regime Detection
 
-**What it does:** Uses Hidden Markov Models to identify market regimes (low vol bull, high vol bear, crisis, etc.) and recommends factor allocations.
+**What it does:** Uses Hidden Markov Models to identify market regimes and recommend factor allocations.
 
-**Why use it:** Factors perform differently in different regimes. Momentum works in trending markets; mean reversion works in choppy markets.
-
-```python
-from src.regime_detection import RegimeDetector
-import pandas as pd
-
-# Load factor returns
-returns = pd.read_csv("factor_returns.csv", index_col=0, parse_dates=True)
-
-# Initialize and fit regime detector
-detector = RegimeDetector(returns)
-detector.fit_hmm(n_regimes=3)
-
+```bash
 # Detect current regime
-current = detector.detect_current_regime()
-print(f"Current: {current.regime.value} (confidence: {current.probability:.1%})")
-print(f"Description: {current.description}")
-
-# Get allocation recommendation
-allocation = detector.generate_regime_signals()
-print(f"Risk-on score: {allocation.risk_on_score:.2f}")
-print(f"Recommended action: {allocation.recommended_action}")
-
-# Predict future regimes
-predictions = detector.predict_regime(duration=5)
+uv run python -m src regime detect --universe SPY --regimes 3 --predict 5
 ```
 
 **Regime Types:**
 
 | Regime | Characteristics | Optimal Strategy |
 |--------|-----------------|------------------|
-| **Low Vol Bull** | Rising prices, low volatility | Overweight momentum, growth factors |
-| **High Vol Bull** | Rising but choppy | Reduce size, maintain momentum with quality tilt |
-| **Low Vol Bear** | Declining prices, low volatility | Defensive positioning, value and quality factors |
+| **Low Vol Bull** | Rising prices, low volatility | Overweight momentum, growth |
 | **High Vol Bear** | Declining, choppy | Maximum defensive, minimum volatility |
-| **Crisis** | Extreme volatility, correlations → 1 | Risk-off, cash/quality focus |
-| **Transition** | Mixed signals | Maintain diversification, await clarity |
-
-**Trading Application:**
-- Adjust factor exposure before regime shifts
-- Avoid momentum crashes during volatile bear markets
-- Position for style rotation (value vs growth, large vs small)
+| **Crisis** | Extreme volatility | Risk-off, cash/quality focus |
 
 ---
 
 ### 6. Signal Backtesting
 
-**What it does:** Validates signal efficacy using walk-forward testing with performance attribution.
+**What it does:** Validates signal efficacy using walk-forward testing.
 
-**Why use it:** Before deploying a factor strategy, verify it would have worked historically. Avoid curve-fitting.
-
-```python
-from src.signal_backtest import SignalBacktester
-from src.signal_aggregator import SignalAggregator
-from src.trading_signals import FactorMomentumAnalyzer
-from src.cross_sectional import CrossSectionalAnalyzer
-from src.regime_detection import RegimeDetector
-import pandas as pd
-
-# Load data
-returns = pd.read_csv("factor_returns.csv", index_col=0, parse_dates=True)
-loadings = pd.read_csv("factor_loadings.csv", index_col=0)
-
-# Build signal aggregator
-aggregator = SignalAggregator(None)
-momentum = FactorMomentumAnalyzer(returns)
-cross = CrossSectionalAnalyzer(loadings)
-regime = RegimeDetector(returns)
-regime.fit_hmm(n_regimes=3)
-
-aggregator.add_momentum_signals(momentum)
-aggregator.add_cross_sectional_signals(cross)
-aggregator.add_regime_signals(regime)
-
+```bash
 # Run backtest
-backtester = SignalBacktester(aggregator, returns)
-results = backtester.run_backtest(
-    train_size=252,    # 1 year training
-    test_size=63,      # 3 month test
-    n_walks=10,        # 10 walk-forward periods
-    min_confidence=70  # Only trade high-confidence signals
-)
-
-print(f"Total Return: {results['total_return']:.2%}")
-print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
-print(f"Max Drawdown: {results['max_drawdown']:.2%}")
-print(f"Hit Rate: {results['hit_rate']:.1%}")
-
-# Optimize signal thresholds
-optimal = backtester.optimize_thresholds(metric='sharpe_ratio')
-print(f"Optimal confidence threshold: {optimal['threshold']:.1f}")
+uv run python -m src backtest --universe SPY \
+  --train-size 252 --test-size 63 --walks 10 \
+  --optimize --report
 ```
-
-**Key Metrics:**
-- **Hit Rate** - Percentage of winning signals
-- **Profit Factor** - Gross profits / gross losses (>1.5 is good)
-- **Win/Loss Ratio** - Average winner / average loser
-- **Calmar Ratio** - Annualized return / max drawdown
 
 ---
 
-### 7. Factor Momentum Analysis
+### 7. Interactive Dashboard
 
-**What it does:** Applies technical analysis to factor returns instead of individual stocks.
-
-**Why use it:** Factors exhibit momentum and mean reversion just like stocks. Timing factor entries can significantly improve returns.
-
-```python
-from src.trading_signals import FactorMomentumAnalyzer
-import pandas as pd
-
-returns = pd.read_csv("factor_returns.csv", index_col=0, parse_dates=True)
-analyzer = FactorMomentumAnalyzer(returns)
-
-# Calculate indicators for a factor
-rsi = analyzer.calculate_rsi('F1')
-macd, signal, hist = analyzer.calculate_macd('F1')
-adx = analyzer.calculate_adx('F1')
-zscore = analyzer.calculate_zscore('F1')
-
-# Detect momentum regime
-regime = analyzer.detect_momentum_regime('F1')
-print(f"Current regime: {regime.value}")
-
-# Get all signals
-signals = analyzer.get_all_signals()
-
-# Check for extremes
-alerts = analyzer.get_all_extreme_alerts(z_threshold=2.0)
-for alert in alerts:
-    print(f"{alert.factor_name}: {alert.direction} (z={alert.z_score:.2f})")
+```bash
+# Launch the Streamlit dashboard
+uv run python -m src dashboard
 ```
 
-**Trading Application:**
-- Time factor ETF entries (e.g., MTUM for momentum, VLUE for value)
-- Avoid chasing factors that are statistically extended
-- Identify factor rotation opportunities
+---
+
+## Complete Trading Workflow Example
+
+### Discover → Optimize → Trade
+
+```bash
+# Step 1: Discover factors in your universe
+uv run python -m src discover --symbols VTHR --method PCA -k 12
+
+# Step 2: Optimize factor weights for maximum Sharpe
+uv run python -m src optimize --universe VTHR \
+  --factor-method pca --n-components 12 \
+  --walk-forward --train-window 90 --test-window 30 \
+  --technique bayesian --name-factors \
+  --export-weights optimal_weights.csv \
+  --output optimization_results.json
+
+# Step 3: Generate tradeable basket
+uv run python -m src basket \
+  --results optimization_results.json \
+  --universe VTHR \
+  --factor-method pca \
+  --long-pct 0.05 --short-pct 0.05 \
+  --capital 100000 \
+  -o my_trade_basket.csv
+
+# Step 4: (Manual) Execute trades from my_trade_basket.csv
+```
+
+### Daily Pre-Market Routine
+
+```bash
+# Check overnight regime status
+uv run python -m src regime detect --universe SPY --predict 5
+
+# Review extreme value alerts
+uv run python -m src signals extremes --universe SPY --trade
+
+# Generate cross-sectional rankings
+uv run python -m src signals cross-section --universe SPY --top-pct 0.05
+```
 
 ---
 
@@ -349,32 +340,24 @@ for alert in alerts:
 ```
 equity-factors/
 ├── src/
-│   ├── alphavantage_system.py      # Data backend with caching and ETF expansion
-│   ├── research.py                 # Main research system and factor models
-│   ├── latent_factors.py           # Factor discovery (PCA, ICA, NMF, Autoencoder)
-│   ├── factor_labeler.py           # LLM-powered factor naming with OpenAI
-│   ├── factor_naming.py            # Factor naming data structures and validation
-│   ├── discover_and_label.py       # Main CLI workflow for factor discovery
-│   ├── trading_signals.py          # Technical indicators for factor returns
-│   ├── cross_sectional.py          # Cross-sectional ranking and stock selection
-│   ├── regime_detection.py         # HMM-based market regime identification
-│   ├── signal_aggregator.py        # Combines multiple signal types
-│   ├── signal_backtest.py          # Walk-forward backtesting framework
-│   ├── signals_cli.py              # Trading signals command-line interface
-│   ├── dashboard.py                # Streamlit interactive dashboard
-│   ├── reporting.py                # HTML/Markdown report generation
-│   ├── factor_performance_table.py # Performance analytics
-│   ├── cli.py                      # Main CLI entry point
-│   └── runner.py                   # Legacy entry point
+│   ├── __main__.py                 # Unified CLI entry point ⭐ NEW
+│   ├── database.py                 # Robust SQLite management ⭐ NEW
+│   ├── alphavantage_system.py      # Data backend with caching
+│   ├── research.py                 # Main research system
+│   ├── factor_optimization.py      # Factor weight optimization ⭐ NEW
+│   ├── factor_weighting.py         # Factor weighting methods
+│   ├── latent_factors.py           # Factor discovery (PCA, ICA, NMF, AE)
+│   ├── factor_labeler.py           # LLM-powered factor naming
+│   ├── trading_signals.py          # Technical indicators
+│   ├── cross_sectional.py          # Cross-sectional ranking
+│   ├── regime_detection.py         # HMM-based regime identification
+│   ├── signal_aggregator.py        # Signal combination
+│   ├── signal_backtest.py          # Walk-forward backtesting
+│   ├── dashboard.py                # Streamlit dashboard
+│   └── reporting.py                # Report generation
 ├── tests/                          # Unit tests
-├── notebooks/                      # Jupyter analysis notebooks
-├── data/                           # Data storage
-├── av_cache.db                     # SQLite cache for API data
-├── factor_returns.csv              # Generated factor returns
-├── factor_loadings.csv             # Generated factor loadings
-├── factor_names.csv                # Generated factor names
-├── pyproject.toml                  # Project dependencies
-├── .env.example                    # Environment variable template
+├── notebooks/                      # Jupyter notebooks
+├── pyproject.toml                  # Dependencies
 └── README.md                       # This file
 ```
 
@@ -390,23 +373,12 @@ ALPHAVANTAGE_API_KEY=your_alpha_vantage_key
 
 # Required for factor naming (optional but recommended)
 OPENAI_API_KEY=your_openai_key
+
+# Optional: Database busy timeout (milliseconds)
+SQLITE_BUSY_TIMEOUT_MS=30000
 ```
 
-### Factor Methods
-
-**For `discover_and_label.py`:**
-- `PCA` - Fast, orthogonal factors; best for most use cases
-- `ICA` - Statistically independent; good for regime analysis
-- `NMF` - Non-negative; slower but interpretable for portfolio construction
-- `AE` - Deep autoencoder; captures non-linear relationships (requires PyTorch)
-
-**For `research.py`:**
-- `fundamental` - Cross-sectional factor model using fundamental data
-- `pca` - Principal Component Analysis on returns
-
----
-
-## API Rate Limits
+### API Rate Limits
 
 The system implements intelligent rate limiting:
 - Price data: 75 calls/minute
@@ -415,77 +387,42 @@ The system implements intelligent rate limiting:
 
 **Cost Optimization:**
 - SQLite caching minimizes repeated API calls
-- First run will be slower; subsequent runs use cached data
-- Free Alpha Vantage tier allows 25 calls/day (premium recommended for production)
+- First run downloads all data; subsequent runs use cache
+- Free Alpha Vantage tier: 25 calls/day (premium recommended)
 
 ---
 
-## Trading Workflow Examples
+## Database Architecture ⭐ NEW
 
-### Daily Pre-Market Routine
+The system uses a robust SQLite architecture with:
 
+- **DELETE journal mode** instead of WAL (eliminates persistent locks)
+- **30-second busy timeout** on all connections
+- **Per-operation connections** with guaranteed cleanup
+- **Automatic WAL migration** from legacy databases
+- **Lock detection and recovery** utilities
+
+**Troubleshooting:**
 ```bash
-# 1. Check overnight regime status
-uv run python src/signals_cli.py regime --universe SPY
+# Check database health
+uv run python -c "from src.database import check_database_health; print(check_database_health())"
 
-# 2. Review extreme value alerts for mean reversion opportunities
-uv run python src/signals_cli.py extremes --universe SPY --trade
+# Optimize database
+uv run python -c "from src.database import optimize_database; optimize_database()"
 
-# 3. Generate cross-sectional rankings for stock selection
-uv run python src/signals_cli.py cross-section --universe SPY --top-pct 0.05
-
-# 4. Launch dashboard for visual monitoring
-uv run python src/signals_cli.py dashboard
-```
-
-### Weekly Strategy Review
-
-```bash
-# 1. Run comprehensive backtest
-uv run python src/signals_cli.py backtest --universe SPY --walks 20 --optimize
-
-# 2. Generate full HTML report
-uv run python src/signals_cli.py report --universe SPY --output weekly_report.html
-
-# 3. Re-discover factors if market structure has changed
-uv run python src/discover_and_label.py -s "SPY" --method PCA -k 10
-```
-
-### Factor Rotation Strategy
-
-```python
-# Detect regime and adjust factor exposure
-from src.regime_detection import RegimeDetector
-from src.trading_signals import FactorMomentumAnalyzer
-import pandas as pd
-
-returns = pd.read_csv("factor_returns.csv", index_col=0, parse_dates=True)
-
-# Check current regime
-detector = RegimeDetector(returns)
-detector.fit_hmm(n_regimes=3)
-regime = detector.detect_current_regime()
-
-# Get optimal factor weights for current regime
-weights = detector.get_regime_optimal_factors(regime.regime)
-
-# Check factor momentum for timing
-analyzer = FactorMomentumAnalyzer(returns)
-for factor in returns.columns:
-    signals = analyzer.get_momentum_signals(factor)
-    # Only trade factors with strong momentum in regime-appropriate direction
-    if signals['combined_signal'] in ['strong_buy', 'buy']:
-        print(f"Consider long {factor} (weight: {weights.get(factor, 0):.2%})")
+# Reset if corrupted
+uv run python -m src clean --all
 ```
 
 ---
 
 ## Performance Notes
 
-- **NMF Performance:** For large ETFs like IWM (2000+ stocks), NMF can be slow. Use PCA or ICA for faster results.
-- **Autoencoder:** Requires PyTorch and benefits from GPU acceleration for large universes.
-- **Caching:** First run downloads all data; subsequent runs are near-instant using SQLite cache.
-- **Memory:** Large universes (1000+ stocks) require ~2GB RAM for factor computation.
+- **NMF Performance:** For large ETFs (2000+ stocks), NMF can be slow. Use PCA or ICA.
+- **Autoencoder:** Requires PyTorch; benefits from GPU acceleration.
+- **Caching:** First run downloads data; subsequent runs use SQLite cache.
+- **Memory:** Large universes (1000+ stocks) require ~2GB RAM.
+- **ICA Convergence:** May not converge with very large universes (>2000 stocks).
 
 ---
 
