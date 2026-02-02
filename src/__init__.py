@@ -107,6 +107,12 @@ from .factor_weighting import (
     WeightingMethod,
 )
 
+# Factor optimization
+from .factor_optimization import (
+    SharpeOptimizer,
+    OptimizationResult,
+)
+
 # Factor naming
 from .factor_labeler import (
     ask_llm,
@@ -179,6 +185,10 @@ __all__ = [
     "OptimalFactorWeighter",
     "FactorCharacteristics",
     "WeightingMethod",
+    
+    # Factor Optimization
+    "SharpeOptimizer",
+    "OptimizationResult",
     
     # Factor Naming
     "ask_llm",
