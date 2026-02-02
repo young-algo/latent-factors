@@ -53,7 +53,10 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize, differential_evolution
 
-from .factor_weighting import OptimalFactorWeighter, WeightingMethod
+try:
+    from .factor_weighting import OptimalFactorWeighter, WeightingMethod
+except ImportError:
+    from src.factor_weighting import OptimalFactorWeighter, WeightingMethod
 
 _LOGGER = logging.getLogger(__name__)
 

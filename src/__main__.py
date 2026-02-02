@@ -395,7 +395,19 @@ def cmd_dashboard(args):
     print("-" * 70)
     
     try:
-        subprocess.run(["streamlit", "run", str(dashboard_path)], check=True)
+        # Set PYTHONPATH to include the project root so imports work correctly
+        env = os.environ.copy()
+        project_root = str(Path(__file__).parent.parent)
+        if 'PYTHONPATH' in env:
+            env['PYTHONPATH'] = project_root + os.pathsep + env['PYTHONPATH']
+        else:
+            env['PYTHONPATH'] = project_root
+        
+        subprocess.run(
+            [sys.executable, "-m", "streamlit", "run", str(dashboard_path)],
+            check=True,
+            env=env
+        )
     except FileNotFoundError:
         print("❌ Streamlit not found. Install with: uv add streamlit")
         sys.exit(1)

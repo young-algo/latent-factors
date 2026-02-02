@@ -53,7 +53,10 @@ from typing import Optional, Generator
 
 import pandas as pd
 
-from .config import config
+try:
+    from .config import config
+except ImportError:
+    from src.config import config
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -5,11 +5,25 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import json
 from pathlib import Path
+import pickle
 
 # Import signal modules
-from .trading_signals import FactorMomentumAnalyzer
-from .cross_sectional import CrossSectionalAnalyzer
-from .regime_detection import RegimeDetector
+try:
+    # Relative imports when used as a package (e.g., python -m src.dashboard)
+    from .trading_signals import FactorMomentumAnalyzer
+    from .cross_sectional import CrossSectionalAnalyzer
+    from .regime_detection import RegimeDetector
+    from .factor_optimization import SharpeOptimizer
+    from .factor_weighting import OptimalFactorWeighter
+    from .database import check_database_health, get_database_path
+except ImportError:
+    # Absolute imports when PYTHONPATH is set (e.g., via CLI)
+    from src.trading_signals import FactorMomentumAnalyzer
+    from src.cross_sectional import CrossSectionalAnalyzer
+    from src.regime_detection import RegimeDetector
+    from src.factor_optimization import SharpeOptimizer
+    from src.factor_weighting import OptimalFactorWeighter
+    from src.database import check_database_health, get_database_path
 
 st.set_page_config(page_title="Equity Factors Dashboard", layout="wide")
 
@@ -23,8 +37,11 @@ def load_data():
         # Try loading names from CSV first, then JSON
         names = {}
         if Path("factor_names.csv").exists():
-            names_df = pd.read_csv("factor_names.csv", header=None, index_col=0)
-            names = names_df[1].to_dict()
+            try:
+                names_df = pd.read_csv("factor_names.csv", header=None, index_col=0)
+                names = names_df[1].to_dict()
+            except Exception:
+                pass
         elif Path("factor_names.json").exists():
             with open("factor_names.json", "r") as f:
                 names = json.load(f)
@@ -32,6 +49,7 @@ def load_data():
         return returns, loadings, names
     except FileNotFoundError:
         return None, None, None
+
 
 def create_signal_dashboard(momentum_analyzer: FactorMomentumAnalyzer):
     """Create signal status dashboard."""
@@ -56,10 +74,10 @@ def create_signal_dashboard(momentum_analyzer: FactorMomentumAnalyzer):
                 return 'background-color: lightcoral'
             return ''
 
-        styled_summary = signal_summary.style.applymap(
+        styled_summary = signal_summary.style.map(
             color_signal, subset=['combined_signal']
         )
-        st.dataframe(styled_summary, use_container_width=True)
+        st.dataframe(styled_summary, width='stretch')
 
         # Extreme alerts panel
         st.subheader("🚨 Extreme Value Alerts")
@@ -86,8 +104,8 @@ def create_signal_dashboard(momentum_analyzer: FactorMomentumAnalyzer):
                     return 'background-color: green; color: white'
                 return ''
 
-            styled_alerts = alert_df.style.applymap(color_alert, subset=['Direction'])
-            st.dataframe(styled_alerts, use_container_width=True)
+            styled_alerts = alert_df.style.map(color_alert, subset=['Direction'])
+            st.dataframe(styled_alerts, width='stretch')
         else:
             st.info("No extreme value alerts at this time.")
 
@@ -186,12 +204,12 @@ def create_cross_sectional_heatmap(cross_analyzer: CrossSectionalAnalyzer):
     with col1:
         st.subheader("Top Decile (Long Candidates)")
         top_decile = rankings[rankings['decile'] == 1].head(10)
-        st.dataframe(top_decile[['score', 'rank', 'percentile']], use_container_width=True)
+        st.dataframe(top_decile[['score', 'rank', 'percentile']], width='stretch')
 
     with col2:
         st.subheader("Bottom Decile (Short Candidates)")
         bottom_decile = rankings[rankings['decile'] == 10].tail(10)
-        st.dataframe(bottom_decile[['score', 'rank', 'percentile']], use_container_width=True)
+        st.dataframe(bottom_decile[['score', 'rank', 'percentile']], width='stretch')
 
     # Full ranking heatmap
     st.subheader("Full Universe Rankings")
@@ -207,13 +225,456 @@ def create_cross_sectional_heatmap(cross_analyzer: CrossSectionalAnalyzer):
     st.pyplot(fig)
 
 
+def create_optimization_panel(returns: pd.DataFrame, loadings: pd.DataFrame, factor_names: dict):
+    """Create factor weight optimization panel."""
+    st.header("🎯 Factor Weight Optimization")
+    
+    with st.expander("Configure Optimization", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            lookback = st.slider("Lookback (days)", 21, 252, 126, key="opt_lookback")
+        with col2:
+            available_methods = ['equal', 'sharpe', 'momentum', 'risk_parity', 
+                                'min_variance', 'max_diversification', 'pca']
+            methods = st.multiselect(
+                "Methods to Blend",
+                available_methods,
+                default=['sharpe', 'momentum', 'risk_parity']
+            )
+        with col3:
+            technique = st.selectbox(
+                "Optimization Technique",
+                ['differential', 'gradient', 'bayesian'],
+                help="Differential: global optimization (recommended). Bayesian: uses Optuna if available."
+            )
+        
+        run_walk_forward = st.checkbox("Run Walk-Forward Optimization", value=False)
+        
+        if run_walk_forward:
+            col1, col2 = st.columns(2)
+            with col1:
+                train_window = st.slider("Train Window (days)", 21, 504, 126, key="wf_train")
+            with col2:
+                test_window = st.slider("Test Window (days)", 5, 126, 21, key="wf_test")
+    
+    if st.button("🚀 Run Optimization", type="primary"):
+        if len(methods) < 2:
+            st.error("Please select at least 2 methods to blend.")
+            return
+        
+        try:
+            with st.spinner("Initializing optimizer..."):
+                optimizer = SharpeOptimizer(returns, loadings)
+            
+            if run_walk_forward:
+                with st.spinner(f"Running walk-forward optimization... This may take a while."):
+                    wf_results = optimizer.walk_forward_optimize(
+                        train_window=train_window,
+                        test_window=test_window,
+                        methods=methods,
+                        technique=technique,
+                        verbose=False
+                    )
+                
+                st.success(f"Walk-forward optimization complete! ({len(wf_results)} periods)")
+                
+                # Display walk-forward results
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    avg_train_sharpe = wf_results['train_sharpe'].mean()
+                    st.metric("Avg Train Sharpe", f"{avg_train_sharpe:.2f}")
+                with col2:
+                    avg_test_sharpe = wf_results['test_sharpe'].mean()
+                    st.metric("Avg Test Sharpe", f"{avg_test_sharpe:.2f}")
+                with col3:
+                    st.metric("Periods", len(wf_results))
+                
+                # Plot rolling method weights
+                st.subheader("Rolling Method Weights Over Time")
+                method_weights_df = pd.DataFrame(wf_results['method_weights'].tolist())
+                method_weights_df.index = wf_results['date']
+                st.area_chart(method_weights_df)
+                
+                # Store results in session state for basket generation
+                st.session_state['wf_results'] = wf_results
+                st.session_state['factor_loadings'] = loadings
+                
+            else:
+                with st.spinner(f"Optimizing blend using {technique}..."):
+                    result = optimizer.optimize_blend(
+                        lookback=lookback,
+                        methods=methods,
+                        technique=technique,
+                        verbose=False
+                    )
+                
+                st.success("Optimization complete!")
+                
+                # Display results in columns
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("Method Allocation")
+                    method_df = pd.DataFrame({
+                        'Method': list(result.method_allocation.keys()),
+                        'Weight': list(result.method_allocation.values())
+                    })
+                    method_df = method_df[method_df['Weight'] > 0.01]  # Filter small weights
+                    
+                    fig, ax = plt.subplots(figsize=(8, 6))
+                    colors = plt.cm.Set3(np.linspace(0, 1, len(method_df)))
+                    wedges, texts, autotexts = ax.pie(
+                        method_df['Weight'], 
+                        labels=method_df['Method'],
+                        autopct='%1.1f%%',
+                        colors=colors,
+                        startangle=90
+                    )
+                    ax.set_title('Optimal Method Blend')
+                    st.pyplot(fig)
+                
+                with col2:
+                    st.subheader("Factor Weights")
+                    factor_df = pd.DataFrame({
+                        'Factor': list(result.optimal_weights.keys()),
+                        'Weight': list(result.optimal_weights.values())
+                    })
+                    factor_df = factor_df.sort_values('Weight', ascending=True)
+                    
+                    # Add factor names if available
+                    if factor_names:
+                        factor_df['Name'] = factor_df['Factor'].map(factor_names)
+                        factor_df['Label'] = factor_df['Factor'] + ': ' + factor_df['Name']
+                    else:
+                        factor_df['Label'] = factor_df['Factor']
+                    
+                    fig, ax = plt.subplots(figsize=(10, max(4, len(factor_df) * 0.4)))
+                    colors = plt.cm.RdYlGn(np.linspace(0.3, 0.7, len(factor_df)))
+                    bars = ax.barh(factor_df['Label'], factor_df['Weight'], color=colors)
+                    ax.set_xlabel('Weight')
+                    ax.set_title('Optimal Factor Weights')
+                    ax.axvline(x=factor_df['Weight'].mean(), color='red', linestyle='--', alpha=0.5, label='Mean')
+                    ax.legend()
+                    st.pyplot(fig)
+                
+                # Performance metrics
+                st.subheader("Performance Metrics")
+                mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+                with mcol1:
+                    st.metric("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
+                with mcol2:
+                    st.metric("Annualized Return", f"{result.annualized_return:.2%}")
+                with mcol3:
+                    st.metric("Annualized Volatility", f"{result.annualized_volatility:.2%}")
+                with mcol4:
+                    if result.annualized_volatility > 0:
+                        return_risk = result.annualized_return / result.annualized_volatility
+                        st.metric("Return/Risk", f"{return_risk:.2f}")
+                
+                # Store results in session state for basket generation
+                st.session_state['opt_result'] = result
+                st.session_state['factor_loadings'] = loadings
+                
+        except Exception as e:
+            st.error(f"Optimization failed: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+
+def create_basket_generator(loadings: pd.DataFrame, factor_names: dict):
+    """Create tradeable basket generator panel."""
+    st.header("🧺 Tradeable Basket Generator")
+    
+    # Check if optimization results exist
+    has_single_opt = 'opt_result' in st.session_state
+    has_wf_opt = 'wf_results' in st.session_state
+    
+    if not (has_single_opt or has_wf_opt):
+        st.info("👆 Run Factor Weight Optimization first to generate a tradeable basket.")
+        return
+    
+    # Source selection
+    if has_single_opt and has_wf_opt:
+        source = st.radio(
+            "Select Optimization Source",
+            ["Single-Period Optimization", "Walk-Forward Optimization (Averaged)"]
+        )
+        use_wf = source == "Walk-Forward Optimization (Averaged)"
+    elif has_wf_opt:
+        use_wf = True
+        st.info("Using Walk-Forward optimization results (averaged across all periods).")
+    else:
+        use_wf = False
+        st.info("Using Single-Period optimization results.")
+    
+    with st.expander("Basket Configuration", expanded=True):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            long_pct = st.slider("Long Percentile", 0.01, 0.5, 0.1, 
+                                help="Top N% of stocks to go long", key="bg_long")
+        with col2:
+            short_pct = st.slider("Short Percentile", 0.01, 0.5, 0.1,
+                                 help="Bottom N% of stocks to short", key="bg_short")
+        with col3:
+            capital = st.number_input("Capital ($)", min_value=1000, value=100000, step=1000, key="bg_capital")
+        with col4:
+            net_exposure = st.slider("Net Exposure", 0.0, 2.0, 1.0,
+                                    help="1.0 = 100% net long, 0.0 = market neutral", key="bg_exposure")
+    
+    if st.button("📊 Generate Basket", type="primary"):
+        try:
+            # Get factor weights from optimization results
+            if use_wf:
+                wf_results = st.session_state['wf_results']
+                # Average factor weights across all periods
+                all_weights = [period['factor_weights'] for period in wf_results.to_dict('records')]
+                weights_df = pd.DataFrame(all_weights)
+                factor_weights = weights_df.mean().to_dict()
+                st.info(f"Averaged factor weights across {len(wf_results)} walk-forward periods.")
+            else:
+                opt_result = st.session_state['opt_result']
+                factor_weights = opt_result.optimal_weights
+            
+            # Calculate composite stock scores
+            composite_score = pd.Series(0.0, index=loadings.index)
+            for factor, weight in factor_weights.items():
+                if factor in loadings.columns:
+                    composite_score += loadings[factor] * weight
+            
+            composite_score = composite_score.sort_values(ascending=False)
+            n_stocks = len(composite_score)
+            
+            # Select longs and shorts
+            n_long = max(1, int(n_stocks * long_pct))
+            n_short = max(1, int(n_stocks * short_pct))
+            
+            longs = composite_score.head(n_long)
+            shorts = composite_score.tail(n_short)
+            
+            # Calculate position weights
+            longs_weighted = longs / longs.sum() if longs.sum() > 0 else longs
+            shorts_weighted = shorts / shorts.sum() * -1 if shorts.sum() != 0 else shorts
+            
+            # Create positions dataframe
+            positions = pd.DataFrame({
+                'ticker': list(longs.index) + list(shorts.index),
+                'composite_score': list(longs.values) + list(shorts.values),
+                'target_weight': list(longs_weighted.values * net_exposure) + 
+                                list(shorts_weighted.values * net_exposure * -1),
+                'side': ['LONG'] * n_long + ['SHORT'] * n_short
+            })
+            
+            # Calculate dollar positions
+            positions['position_dollars'] = positions['target_weight'] * capital
+            
+            # Display results
+            st.subheader("Basket Positions")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(f"**📈 TOP {n_long} LONG POSITIONS:**")
+                long_df = positions[positions['side'] == 'LONG'].copy()
+                if factor_names:
+                    long_df['name'] = long_df.index.map(lambda x: factor_names.get(x, ''))
+                st.dataframe(
+                    long_df[['ticker', 'composite_score', 'target_weight', 'position_dollars']].style.format({
+                        'composite_score': '{:.4f}',
+                        'target_weight': '{:.2%}',
+                        'position_dollars': '${:,.0f}'
+                    }),
+                    width='stretch'
+                )
+            
+            with col2:
+                st.markdown(f"**📉 TOP {n_short} SHORT POSITIONS:**")
+                short_df = positions[positions['side'] == 'SHORT'].copy()
+                st.dataframe(
+                    short_df[['ticker', 'composite_score', 'target_weight', 'position_dollars']].style.format({
+                        'composite_score': '{:.4f}',
+                        'target_weight': '{:.2%}',
+                        'position_dollars': '${:,.0f}'
+                    }),
+                    width='stretch'
+                )
+            
+            # Portfolio summary
+            st.subheader("Portfolio Summary")
+            gross_exposure = positions['target_weight'].abs().sum()
+            net_exposure = positions['target_weight'].sum()
+            
+            s_col1, s_col2, s_col3, s_col4 = st.columns(4)
+            with s_col1:
+                st.metric("Gross Exposure", f"{gross_exposure:.1%}")
+            with s_col2:
+                st.metric("Net Exposure", f"{net_exposure:.1%}")
+            with s_col3:
+                st.metric("Number of Positions", len(positions))
+            with s_col4:
+                long_short_ratio = (n_long / (n_long + n_short)) * 100
+                st.metric("Long Bias", f"{long_short_ratio:.0f}%")
+            
+            # Weight distribution chart
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+            
+            # Long weights
+            long_weights = positions[positions['side'] == 'LONG']['target_weight'].sort_values(ascending=True)
+            ax1.barh(range(len(long_weights)), long_weights.values, color='green', alpha=0.7)
+            ax1.set_yticks(range(len(long_weights)))
+            ax1.set_yticklabels(long_weights.index, fontsize=8)
+            ax1.set_xlabel('Weight')
+            ax1.set_title('Long Position Weights')
+            ax1.axvline(x=0, color='black', linewidth=0.5)
+            
+            # Short weights (absolute values)
+            short_weights = positions[positions['side'] == 'SHORT']['target_weight'].abs().sort_values(ascending=True)
+            ax2.barh(range(len(short_weights)), short_weights.values, color='red', alpha=0.7)
+            ax2.set_yticks(range(len(short_weights)))
+            ax2.set_yticklabels(short_weights.index, fontsize=8)
+            ax2.set_xlabel('Weight (Absolute)')
+            ax2.set_title('Short Position Weights')
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+            
+            # Export option
+            csv = positions.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Basket as CSV",
+                data=csv,
+                file_name=f"trade_basket_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+            
+        except Exception as e:
+            st.error(f"Basket generation failed: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+
+def create_factor_characteristics_panel(returns: pd.DataFrame, loadings: pd.DataFrame, factor_names: dict):
+    """Create factor characteristics panel."""
+    st.header("📋 Factor Characteristics")
+    
+    lookback = st.slider("Lookback Period (days)", 21, 252, 63, key="char_lookback")
+    
+    try:
+        weighter = OptimalFactorWeighter(loadings, returns)
+        characteristics = weighter.get_factor_characteristics(lookback=lookback)
+        
+        # Convert to DataFrame
+        char_data = []
+        for factor, char in characteristics.items():
+            char_data.append({
+                'Factor': factor,
+                'Name': factor_names.get(factor, ''),
+                'Sharpe Ratio': char.sharpe_ratio,
+                'Mean Return': char.mean_return,
+                'Volatility': char.volatility,
+                'Max Drawdown': char.max_drawdown,
+                'Win Rate': char.win_rate
+            })
+        
+        char_df = pd.DataFrame(char_data)
+        
+        # Display with color coding
+        st.dataframe(
+            char_df.style.format({
+                'Sharpe Ratio': '{:.2f}',
+                'Mean Return': '{:.4f}',
+                'Volatility': '{:.4f}',
+                'Max Drawdown': '{:.2%}',
+                'Win Rate': '{:.1%}'
+            }).background_gradient(subset=['Sharpe Ratio'], cmap='RdYlGn', center=0)
+              .background_gradient(subset=['Win Rate'], cmap='RdYlGn', vmin=0, vmax=1)
+              .background_gradient(subset=['Max Drawdown'], cmap='RdYlGn_r', vmin=-0.5, vmax=0),
+            width='stretch'
+        )
+        
+        # Individual weighting method comparison
+        st.subheader("Weighting Method Comparison")
+        
+        if st.button("Calculate All Weighting Methods"):
+            with st.spinner("Calculating weights for all methods..."):
+                methods_to_calc = {
+                    'Equal': lambda: weighter.equal_weights(),
+                    'Sharpe': lambda: weighter.sharpe_weights(lookback=lookback),
+                    'Momentum': lambda: weighter.momentum_weights(lookback=min(lookback, 126)),
+                    'Risk Parity': lambda: weighter.risk_parity_weights(lookback=lookback),
+                    'Min Variance': lambda: weighter.min_variance_weights(lookback=lookback),
+                    'Max Diversification': lambda: weighter.max_diversification_weights(lookback=lookback),
+                    'PCA': lambda: weighter.pca_weights()
+                }
+                
+                all_weights = {}
+                for method_name, method_func in methods_to_calc.items():
+                    try:
+                        all_weights[method_name] = method_func()
+                    except Exception as e:
+                        st.warning(f"Could not calculate {method_name}: {e}")
+                
+                # Create comparison dataframe
+                comp_df = pd.DataFrame(all_weights).T.fillna(0)
+                
+                # Heatmap
+                fig, ax = plt.subplots(figsize=(12, max(4, len(comp_df) * 0.5)))
+                sns.heatmap(comp_df, annot=True, fmt='.2f', cmap='RdYlGn', center=0, ax=ax)
+                ax.set_title('Factor Weights by Method')
+                ax.set_xlabel('Factor')
+                ax.set_ylabel('Weighting Method')
+                plt.tight_layout()
+                st.pyplot(fig)
+                
+    except Exception as e:
+        st.error(f"Could not calculate characteristics: {e}")
+
+
+def create_database_health_panel():
+    """Create database health monitor panel."""
+    st.header("🗄️ Database Health Monitor")
+    
+    try:
+        health = check_database_health()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            exists = "✅ Yes" if health['exists'] else "❌ No"
+            st.metric("Database Exists", exists)
+        with col2:
+            st.metric("Size (MB)", f"{health['size_mb']:.1f}")
+        with col3:
+            locked = "🔒 Locked" if health['is_locked'] else "🔓 Unlocked"
+            st.metric("Lock Status", locked)
+        with col4:
+            healthy = "✅ Healthy" if health['is_healthy'] else "⚠️ Issues"
+            st.metric("Health", healthy)
+        
+        if health['tables']:
+            st.subheader("Table Record Counts")
+            counts_df = pd.DataFrame([
+                {'Table': k, 'Records': v} 
+                for k, v in health['record_counts'].items()
+            ])
+            st.dataframe(counts_df, width='stretch')
+        
+        if health['errors']:
+            st.error("Errors detected:")
+            for error in health['errors']:
+                st.write(f"- {error}")
+        elif health['exists']:
+            st.success("Database is healthy!")
+        
+    except Exception as e:
+        st.warning(f"Could not check database health: {e}")
+
+
 def main():
     st.title("📊 Equity Factors Research Dashboard")
 
     returns, loadings, names = load_data()
 
     if returns is None:
-        st.error("❌ Data not found. Please run 'python src/cli.py discover' first.")
+        st.error("❌ Data not found. Please run 'python -m src discover' first.")
         return
 
     # Initialize analyzers
@@ -340,14 +801,27 @@ def main():
     if cross_analyzer:
         create_cross_sectional_heatmap(cross_analyzer)
 
+    # --- Factor Weight Optimization Section ---
+    st.divider()
+    create_optimization_panel(returns, loadings, names)
+    
+    # --- Tradeable Basket Generator Section ---
+    st.divider()
+    create_basket_generator(loadings, names)
+    
+    # --- Factor Characteristics Section ---
+    st.divider()
+    create_factor_characteristics_panel(returns, loadings, names)
+
     # --- Regime Section ---
+    st.divider()
     if regime_detector:
         st.header("📊 Regime Analysis")
 
         try:
             regime_summary = regime_detector.get_regime_summary()
             st.subheader("Regime Statistics")
-            st.dataframe(regime_summary, use_container_width=True)
+            st.dataframe(regime_summary, width='stretch')
 
             # Regime transition matrix
             st.subheader("Regime Transition Matrix")
@@ -372,12 +846,27 @@ def main():
                         'Probability': f"{pred.probability:.1%}",
                         'Expected Trend': f"{pred.trend:.4f}"
                     })
-                st.dataframe(pd.DataFrame(pred_data), use_container_width=True)
+                st.dataframe(pd.DataFrame(pred_data), width='stretch')
             except Exception as e:
                 st.warning(f"Regime prediction not available: {e}")
 
         except Exception as e:
             st.warning(f"Regime analysis not available: {e}")
+    
+    # --- Database Health Section (Sidebar) ---
+    st.sidebar.divider()
+    with st.sidebar.expander("🗄️ Database Health"):
+        try:
+            health = check_database_health()
+            st.write(f"**Exists:** {'✅' if health['exists'] else '❌'}")
+            st.write(f"**Size:** {health['size_mb']:.1f} MB")
+            st.write(f"**Status:** {'✅ Healthy' if health['is_healthy'] else '⚠️ Issues'}")
+            if health['errors']:
+                st.write("**Errors:**")
+                for err in health['errors']:
+                    st.write(f"- {err}")
+        except Exception as e:
+            st.write(f"⚠️ Could not check: {e}")
 
 if __name__ == "__main__":
     main()
