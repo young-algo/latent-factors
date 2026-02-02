@@ -100,6 +100,13 @@ from .latent_factors import (
     validate_factor_distinctiveness,
 )
 
+# Factor weighting
+from .factor_weighting import (
+    OptimalFactorWeighter,
+    FactorCharacteristics,
+    WeightingMethod,
+)
+
 # Factor naming
 from .factor_labeler import (
     ask_llm,
@@ -167,6 +174,11 @@ __all__ = [
     "autoencoder_factors",
     "StatMethod",
     "validate_factor_distinctiveness",
+    
+    # Factor Weighting
+    "OptimalFactorWeighter",
+    "FactorCharacteristics",
+    "WeightingMethod",
     
     # Factor Naming
     "ask_llm",
