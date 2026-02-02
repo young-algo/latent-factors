@@ -27,6 +27,9 @@ import numpy as np
 import pandas as pd
 import requests
 
+# Import new robust database module
+from .database import get_db_connection, ensure_schema, migrate_from_wal_mode
+
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
@@ -92,67 +95,43 @@ def _coerce_numeric(d: Mapping[str, str]) -> dict[str, Any]:
     return out
 
 
-class _ConnectionPool:
-    """
-    Simple SQLite connection pool for thread-safe database access.
+# ============================================================================
+# NOTE: _ConnectionPool has been replaced with robust database module
+# See src/database.py for the new implementation
+# ============================================================================
 
-    Maintains a pool of reusable connections to avoid the overhead of
-    creating new connections for each database operation.
-    """
-    def __init__(self, db_path: Path, pool_size: int = 5):
-        self.db_path = db_path
-        self._pool: Queue[sqlite3.Connection] = Queue(maxsize=pool_size)
-        self._pool_size = pool_size
-        self._created = 0
-        self._lock = threading.Lock()
+def _locked_store_px(db_path: Path, ticker: str, frame: pd.DataFrame, start_date: pd.Timestamp) -> None:
+    """Thread-safe price storage using database module."""
+    with get_db_connection(db_path) as con:
+        # Remove existing data for this ticker to avoid unique constraint violations
+        con.execute("DELETE FROM prices WHERE ticker=?", (ticker,))
+        
+        frame.assign(ticker=ticker).to_sql(
+            "prices", con, if_exists="append", index_label="date", method="multi"
+        )
+        con.execute(
+            "REPLACE INTO meta VALUES (?, ?)",
+            (ticker, frame.index.max().strftime("%Y-%m-%d")),
+        )
 
-    def _create_connection(self) -> sqlite3.Connection:
-        """Create a new SQLite connection with optimal settings."""
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent access
-        return conn
+def _locked_store_fnd(db_path: Path, ticker: str, data: dict) -> None:
+    """Thread-safe fundamentals storage using database module."""
+    with get_db_connection(db_path) as con:
+        con.execute(
+            "REPLACE INTO fundamentals VALUES (?, ?, ?)",
+            (ticker, datetime.now().strftime("%Y-%m-%d"), json.dumps(data)),
+        )
 
-    @contextmanager
-    def connection(self):
-        """
-        Get a connection from the pool (or create one if pool empty and under limit).
-
-        Usage:
-            with pool.connection() as conn:
-                conn.execute(...)
-        """
-        conn = None
-        try:
-            # Try to get an existing connection from the pool
-            conn = self._pool.get_nowait()
-        except Empty:
-            # Pool empty - create new connection if under limit
-            with self._lock:
-                if self._created < self._pool_size:
-                    conn = self._create_connection()
-                    self._created += 1
-            # If at limit, wait for a connection to become available
-            if conn is None:
-                conn = self._pool.get()
-
-        try:
-            yield conn
-        finally:
-            # Return connection to pool
-            try:
-                self._pool.put_nowait(conn)
-            except:
-                # Pool full, close this connection
-                conn.close()
-
-    def close_all(self):
-        """Close all pooled connections."""
-        while True:
-            try:
-                conn = self._pool.get_nowait()
-                conn.close()
-            except Empty:
-                break
+def _locked_store_etf_holdings(db_path: Path, etf: str, frame: pd.DataFrame) -> None:
+    """Thread-safe ETF holdings storage using database module."""
+    frame = frame[["constituent", "weight"]].dropna()
+    today = datetime.now().strftime("%Y-%m-%d")
+    with get_db_connection(db_path) as con:
+        con.execute("DELETE FROM etf_holdings WHERE etf=?", (etf,))
+        frame.assign(etf=etf, retrieved=today).to_sql(
+            "etf_holdings", con, if_exists="append", index=False, method="multi"
+        )
+    _LOGGER.info("Stored %d holdings for %s", len(frame), etf)
 
 
 class DataBackend:
@@ -261,9 +240,10 @@ class DataBackend:
         self.db_path   = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Connection pool for efficient database access
-        self._conn_pool = _ConnectionPool(self.db_path, pool_size=5)
-        self._ensure_schema()
+        # Use robust database module instead of connection pool
+        # Migrate from WAL mode if needed
+        migrate_from_wal_mode(self.db_path)
+        ensure_schema(self.db_path)
 
         self._t_last_px  = 0.0
         self._t_last_fnd = 0.0
@@ -598,7 +578,7 @@ class DataBackend:
     # --------------------  INTERNAL – SCHEMA  ------------------------ #
     # ================================================================= #
     def _ensure_schema(self) -> None:
-        with self._conn_pool.connection() as con:
+        with get_db_connection(self.db_path) as con:
             # price + meta
             con.execute(
                 """CREATE TABLE IF NOT EXISTS prices (
@@ -710,7 +690,7 @@ class DataBackend:
     def _store_px(self, ticker: str, frame: pd.DataFrame) -> None:
         frame = frame.loc[frame.index >= self.start]
         with self._lock:
-            with self._conn_pool.connection() as con:
+            with get_db_connection(self.db_path) as con:
                 # Remove existing data for this ticker to avoid unique constraint violations
                 con.execute("DELETE FROM prices WHERE ticker=?", (ticker,))
                 
@@ -723,7 +703,7 @@ class DataBackend:
                 )
 
     def _load_px(self, ticker: str) -> pd.Series:
-        with self._conn_pool.connection() as con:
+        with get_db_connection(self.db_path) as con:
             df = pd.read_sql(
                 "SELECT date, adj_close FROM prices WHERE ticker=?",
                 con,
@@ -733,7 +713,7 @@ class DataBackend:
         return df.set_index("date")["adj_close"].rename(ticker)
 
     def _last_price_update(self, ticker: str) -> pd.Timestamp | None:
-        with self._conn_pool.connection() as con:
+        with get_db_connection(self.db_path) as con:
             cur = con.cursor()
             cur.execute("SELECT last_update FROM meta WHERE ticker=?", (ticker,))
             row = cur.fetchone()
@@ -802,21 +782,21 @@ class DataBackend:
             data = {"AssetType": "ETF" if ticker in ["SPY", "QQQ", "IWM", "DIA"] else "Stock"}
             
         with self._lock:
-            with self._conn_pool.connection() as con:
+            with get_db_connection(self.db_path) as con:
                 con.execute(
                     "REPLACE INTO fundamentals VALUES (?, ?, ?)",
                     (ticker, datetime.now().strftime("%Y-%m-%d"), json.dumps(data)),
                 )
 
     def _load_fnd(self, ticker: str) -> Mapping[str, Any]:
-        with self._conn_pool.connection() as con:
+        with get_db_connection(self.db_path) as con:
             cur = con.cursor()
             cur.execute("SELECT json FROM fundamentals WHERE ticker=?", (ticker,))
             row = cur.fetchone()
         return json.loads(row[0]) if row else {}
 
     def _last_fnd_update(self, ticker: str) -> pd.Timestamp | None:
-        with self._conn_pool.connection() as con:
+        with get_db_connection(self.db_path) as con:
             cur = con.cursor()
             cur.execute("SELECT last_update FROM fundamentals WHERE ticker=?", (ticker,))
             row = cur.fetchone()
@@ -903,18 +883,10 @@ class DataBackend:
 
 
     def _store_etf_holdings(self, etf: str, frame: pd.DataFrame) -> None:
-        frame = frame[["constituent", "weight"]].dropna()
-        today = datetime.now().strftime("%Y-%m-%d")
-        with self._lock:
-            with self._conn_pool.connection() as con:
-                con.execute("DELETE FROM etf_holdings WHERE etf=?", (etf,))
-                frame.assign(etf=etf, retrieved=today).to_sql(
-                    "etf_holdings", con, if_exists="append", index=False, method="multi"
-                )
-        _LOGGER.info("Stored %d holdings for %s", len(frame), etf)
+        _locked_store_etf_holdings(self.db_path, etf, frame)
 
     def _load_etf_holdings(self, etf: str) -> pd.DataFrame:
-        with self._conn_pool.connection() as con:
+        with get_db_connection(self.db_path) as con:
             df = pd.read_sql(
                 "SELECT constituent, weight FROM etf_holdings WHERE etf=?",
                 con,
@@ -923,7 +895,7 @@ class DataBackend:
         return df
 
     def _last_etf_update(self, etf: str) -> pd.Timestamp | None:
-        with self._conn_pool.connection() as con:
+        with get_db_connection(self.db_path) as con:
             cur = con.cursor()
             cur.execute(
                 "SELECT MAX(retrieved) FROM etf_holdings WHERE etf=?", (etf,)

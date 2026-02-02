@@ -501,6 +501,38 @@ def cmd_optimize(args):
     # Initialize optimizer
     optimizer = SharpeOptimizer(factor_returns, factor_loadings)
     
+    # Factor naming (if enabled) - do this once before optimization
+    factor_names = {}
+    if args.name_factors:
+        print("\n" + "=" * 70)
+        print("🤖 FACTOR NAMING")
+        print("=" * 70)
+        
+        from src.config import config
+        if not config.validate_openai():
+            print("⚠️  OPENAI_API_KEY not found. Skipping factor naming.")
+            print("   Set OPENAI_API_KEY environment variable to enable LLM naming.")
+        else:
+            try:
+                print("\n🔍 Analyzing factor loadings for naming...")
+                factor_names = frs.name_factors(cache_path=args.factor_names_output.replace('.csv', '.json'))
+                
+                print("\n📋 Factor Names:")
+                for factor, name in factor_names.items():
+                    print(f"   {factor}: {name}")
+                
+                # Save factor names to CSV
+                names_df = pd.DataFrame({
+                    'factor': list(factor_names.keys()),
+                    'name': list(factor_names.values())
+                })
+                names_df.to_csv(args.factor_names_output, index=False)
+                print(f"\n💾 Factor names saved to: {args.factor_names_output}")
+                
+            except Exception as e:
+                print(f"⚠️  Factor naming failed: {e}")
+                factor_names = {}
+    
     if args.walk_forward:
         print(f"\n🔄 Running walk-forward optimization...")
         print(f"   Training window: {args.train_window} days")
@@ -523,7 +555,16 @@ def cmd_optimize(args):
         
         # Save results
         if args.output:
-            results.to_json(args.output, orient='records', date_format='iso')
+            # Add factor names to each period's results if available
+            if factor_names:
+                results_dict = results.to_dict('records')
+                for period in results_dict:
+                    period['factor_names'] = factor_names
+                import json
+                with open(args.output, 'w') as f:
+                    json.dump(results_dict, f, indent=2, default=str)
+            else:
+                results.to_json(args.output, orient='records', date_format='iso')
             print(f"\n💾 Results saved to: {args.output}")
     
     else:
@@ -564,6 +605,9 @@ def cmd_optimize(args):
                 'factor': list(result.optimal_weights.keys()),
                 'weight': list(result.optimal_weights.values())
             })
+            # Add factor names if available
+            if factor_names:
+                weights_df['factor_name'] = weights_df['factor'].map(factor_names)
             weights_df.to_csv(args.export_weights, index=False)
             print(f"\n💾 Weights exported to: {args.export_weights}")
         
@@ -579,6 +623,9 @@ def cmd_optimize(args):
                 'methods': args.methods,
                 'technique': args.technique
             }
+            # Add factor names if available
+            if factor_names:
+                output_data['factor_names'] = factor_names
             with open(args.output, 'w') as f:
                 json.dump(output_data, f, indent=2)
             print(f"💾 Full results saved to: {args.output}")
@@ -1006,6 +1053,16 @@ For more help on a specific command:
     optimize_parser.add_argument(
         '--export-weights',
         help='Export optimal weights to CSV for use in trading'
+    )
+    optimize_parser.add_argument(
+        '--name-factors',
+        action='store_true',
+        help='Enable LLM-powered factor naming (requires OPENAI_API_KEY)'
+    )
+    optimize_parser.add_argument(
+        '--factor-names-output',
+        default='factor_names.csv',
+        help='Output file for factor names when --name-factors is enabled (default: factor_names.csv)'
     )
     
     return parser
