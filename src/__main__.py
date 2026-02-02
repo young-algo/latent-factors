@@ -470,30 +470,31 @@ def cmd_optimize(args):
     # Load or generate factors
     print(f"\n📊 Loading factor data for universe: {', '.join(args.universe)}")
     
-    cache_file = f"factor_cache_{'_'.join(args.universe)}_fundamental.pkl"
+    cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.factor_method}.pkl"
     
     if Path(cache_file).exists():
         print(f"📂 Loading cached factors from {cache_file}")
         import pickle
         with open(cache_file, 'rb') as f:
-            frs, factor_returns, factor_loadings = pickle.load(f)
+            factor_returns, factor_loadings = pickle.load(f)
+        frs = None  # Will recreate if needed for factor naming
     else:
-        print("🔍 Generating factors (this may take a while)...")
+        print(f"🔍 Generating factors using '{args.factor_method}' method (this may take a while)...")
         frs = FactorResearchSystem(
             get_api_key(),
             universe=args.universe,
-            factor_method='fundamental',
-            n_components=8,
+            factor_method=args.factor_method,
+            n_components=args.n_components,
             expand_etfs=True
         )
         frs.fit_factors()
         factor_returns = frs.get_factor_returns()
         factor_loadings = frs._expos
         
-        # Cache results
+        # Cache only the factor data (not the FactorResearchSystem object)
         import pickle
         with open(cache_file, 'wb') as f:
-            pickle.dump((frs, factor_returns, factor_loadings), f)
+            pickle.dump((factor_returns, factor_loadings), f)
     
     print(f"   Factor returns shape: {factor_returns.shape}")
     print(f"   Factor loadings shape: {factor_loadings.shape}")
@@ -512,6 +513,9 @@ def cmd_optimize(args):
         if not config.validate_openai():
             print("⚠️  OPENAI_API_KEY not found. Skipping factor naming.")
             print("   Set OPENAI_API_KEY environment variable to enable LLM naming.")
+        elif frs is None:
+            print("⚠️  Cannot name factors when loading from cache (FactorResearchSystem not available).")
+            print("   Run without --name-factors or delete cache file to regenerate with naming.")
         else:
             try:
                 print("\n🔍 Analyzing factor loadings for naming...")
@@ -629,6 +633,117 @@ def cmd_optimize(args):
             with open(args.output, 'w') as f:
                 json.dump(output_data, f, indent=2)
             print(f"💾 Full results saved to: {args.output}")
+
+
+def cmd_basket(args):
+    """Generate tradeable stock basket from optimization results."""
+    import json
+    import pickle
+    
+    print("=" * 70)
+    print("📊 GENERATING TRADEABLE BASKET")
+    print("=" * 70)
+    
+    # Load optimization results
+    print(f"\n📂 Loading optimization results from: {args.results}")
+    with open(args.results, 'r') as f:
+        opt_results = json.load(f)
+    
+    # Load factor loadings from cache
+    cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.factor_method}.pkl"
+    if not Path(cache_file).exists():
+        print(f"❌ Cache file not found: {cache_file}")
+        print("   Run optimization first to generate factor loadings.")
+        sys.exit(1)
+    
+    print(f"📂 Loading factor loadings from: {cache_file}")
+    with open(cache_file, 'rb') as f:
+        _, factor_loadings = pickle.load(f)
+    
+    # Get factor weights
+    if 'optimal_weights' in opt_results:
+        factor_weights = opt_results['optimal_weights']
+    elif 'method_allocation' in opt_results:
+        # Walk-forward results
+        print("⚠️  Using last period's weights. Consider averaging across periods.")
+        factor_weights = opt_results[-1]['factor_weights'] if isinstance(opt_results, list) else opt_results['optimal_weights']
+    else:
+        print("❌ No factor weights found in results file.")
+        sys.exit(1)
+    
+    print(f"\n📈 Optimal Factor Weights:")
+    for f, w in sorted(factor_weights.items(), key=lambda x: -x[1]):
+        print(f"   {f}: {w:.2%}")
+    
+    # Calculate composite stock scores
+    print("\n🔍 Calculating target stock exposures...")
+    composite_score = pd.Series(0.0, index=factor_loadings.index)
+    
+    for factor, weight in factor_weights.items():
+        if factor in factor_loadings.columns:
+            composite_score += factor_loadings[factor] * weight
+    
+    composite_score = composite_score.sort_values(ascending=False)
+    n_stocks = len(composite_score)
+    
+    # Select longs and shorts
+    n_long = int(n_stocks * args.long_pct)
+    n_short = int(n_stocks * args.short_pct)
+    
+    longs = composite_score.head(n_long)
+    shorts = composite_score.tail(n_short)
+    
+    print(f"\n📊 Basket Composition:")
+    print(f"   Universe: {n_stocks} stocks")
+    print(f"   Longs: {n_long} stocks (top {args.long_pct:.0%})")
+    print(f"   Shorts: {n_short} stocks (bottom {args.short_pct:.0%})")
+    
+    # Calculate position weights
+    longs_weighted = longs / longs.sum() if longs.sum() > 0 else longs
+    shorts_weighted = shorts / shorts.sum() * -1 if shorts.sum() != 0 else shorts
+    
+    # Create positions dataframe
+    positions = pd.DataFrame({
+        'ticker': list(longs.index) + list(shorts.index),
+        'composite_score': list(longs.values) + list(shorts.values),
+        'target_weight': list(longs_weighted.values * args.net_exposure) + 
+                        list(shorts_weighted.values * args.net_exposure * -1),
+        'side': ['LONG'] * n_long + ['SHORT'] * n_short
+    })
+    
+    # Calculate dollar positions
+    positions['position_dollars'] = positions['target_weight'] * args.capital
+    
+    # Display results
+    print(f"\n📈 TOP {n_long} LONG POSITIONS:")
+    print("-" * 70)
+    print(f"{'Ticker':<10} {'Score':>10} {'Weight':>10} {'Position ($)':>15}")
+    print("-" * 70)
+    for _, row in positions[positions['side'] == 'LONG'].head(10).iterrows():
+        print(f"{row['ticker']:<10} {row['composite_score']:>10.4f} {row['target_weight']:>9.2%} ${row['position_dollars']:>14,.0f}")
+    
+    print(f"\n📉 TOP {n_short} SHORT POSITIONS:")
+    print("-" * 70)
+    print(f"{'Ticker':<10} {'Score':>10} {'Weight':>10} {'Position ($)':>15}")
+    print("-" * 70)
+    for _, row in positions[positions['side'] == 'SHORT'].tail(10).iterrows():
+        print(f"{row['ticker']:<10} {row['composite_score']:>10.4f} {row['target_weight']:>9.2%} ${row['position_dollars']:>14,.0f}")
+    
+    # Export
+    if args.output:
+        positions.to_csv(args.output, index=False)
+        print(f"\n💾 Basket exported to: {args.output}")
+    
+    # Summary stats
+    gross_exposure = positions['target_weight'].abs().sum()
+    net_exposure = positions['target_weight'].sum()
+    
+    print(f"\n📊 Portfolio Summary:")
+    print(f"   Gross Exposure: {gross_exposure:.1%}")
+    print(f"   Net Exposure: {net_exposure:.1%}")
+    print(f"   Number of Positions: {len(positions)}")
+    
+    return positions
 
 
 def cmd_version(args):
@@ -1064,6 +1179,72 @@ For more help on a specific command:
         default='factor_names.csv',
         help='Output file for factor names when --name-factors is enabled (default: factor_names.csv)'
     )
+    optimize_parser.add_argument(
+        '--factor-method',
+        choices=['fundamental', 'pca', 'ica', 'sparse_pca', 'factor'],
+        default='pca',
+        help='Factor discovery method: fundamental (Fama-French), pca, ica, sparse_pca, or factor (default: pca)'
+    )
+    optimize_parser.add_argument(
+        '--n-components',
+        type=int,
+        default=10,
+        help='Number of factors to extract (default: 10)'
+    )
+    
+    # -------------------------------------------------------------------------
+    # Basket command (Generate tradeable basket from optimization)
+    # -------------------------------------------------------------------------
+    basket_parser = subparsers.add_parser(
+        'basket',
+        help='Generate tradeable stock basket from optimization results',
+        description='Convert factor weights into specific long/short stock positions'
+    )
+    basket_parser.add_argument(
+        '--results',
+        required=True,
+        help='Path to optimization results JSON file'
+    )
+    basket_parser.add_argument(
+        '--universe',
+        nargs='+',
+        required=True,
+        help='Stock/ETF universe used in optimization'
+    )
+    basket_parser.add_argument(
+        '--factor-method',
+        choices=['fundamental', 'pca', 'ica', 'sparse_pca', 'factor'],
+        default='pca',
+        help='Factor method used in optimization (default: pca)'
+    )
+    basket_parser.add_argument(
+        '--long-pct',
+        type=float,
+        default=0.1,
+        help='Percentile for long positions (default: 0.1 = top 10%%)'
+    )
+    basket_parser.add_argument(
+        '--short-pct',
+        type=float,
+        default=0.1,
+        help='Percentile for short positions (default: 0.1 = bottom 10%%)'
+    )
+    basket_parser.add_argument(
+        '--capital',
+        type=float,
+        default=100000,
+        help='Capital to allocate (default: 100000)'
+    )
+    basket_parser.add_argument(
+        '--net-exposure',
+        type=float,
+        default=1.0,
+        help='Net exposure target (default: 1.0 = 100%% long)'
+    )
+    basket_parser.add_argument(
+        '-o', '--output',
+        help='Export basket to CSV file'
+    )
     
     return parser
 
@@ -1092,6 +1273,7 @@ def main():
         'regime': lambda args: cmd_regime_detect(args) if args.regime_command == 'detect' else None,
         'backtest': cmd_backtest,
         'optimize': cmd_optimize,
+        'basket': cmd_basket,
     }
     
     # Handle signals subcommands
