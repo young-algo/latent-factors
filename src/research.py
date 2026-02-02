@@ -849,6 +849,230 @@ class FactorResearchSystem(DataBackend):
         return unique_tickers
 
     # ========================================================= #
+    # ----------------  POINT-IN-TIME BACKTESTING  ------------- #
+    # ========================================================= #
+    def get_backtest_universe(
+        self, 
+        current_sim_date: str, 
+        top_n: int = 500,
+        use_pit: bool = True
+    ) -> List[str]:
+        """
+        Retrieve the investable universe for a specific historical date.
+        
+        This is the CORRECT method for backtesting that eliminates survivorship
+        bias and look-ahead bias. It replaces the flawed get_etf_holdings() 
+        approach which projects current ETF constituents into the past.
+        
+        Parameters
+        ----------
+        current_sim_date : str
+            The simulation date in 'YYYY-MM-DD' format (e.g., '2008-09-15')
+        top_n : int, default 500
+            Number of top liquid stocks to include
+        use_pit : bool, default True
+            If True, use Point-in-Time universe from historical_universes table.
+            If False, fall back to current ETF holdings (for comparison/testing).
+            
+        Returns
+        -------
+        List[str]
+            List of ticker symbols that were investable on the simulation date
+            
+        Implementation
+        --------------
+        1. Query historical_universes table for the most recent generated universe
+        2. If no universe exists for the exact date, finds the closest prior date
+        3. Returns tickers sorted by dollar volume (most liquid first)
+        
+        QA Verification Test
+        --------------------
+        >>> frs = FactorResearchSystem(api_key, universe=["SPY"])
+        >>> 
+        >>> # Test 1: Lehman Brothers bankruptcy
+        >>> tickers_2008 = frs.get_backtest_universe('2008-09-15')
+        >>> assert 'LEH' in tickers_2008, "LEH (Lehman Brothers) must be present!"
+        >>> 
+        >>> # Test 2: Silicon Valley Bank failure
+        >>> tickers_2023 = frs.get_backtest_universe('2023-01-01')
+        >>> assert 'SIVB' in tickers_2023, "SIVB (SVB) must be present!"
+        >>> 
+        >>> # If these assertions fail, the system is still biased.
+        
+        Migration Guide
+        ---------------
+        Current (Flawed - includes future constituents):
+        >>> universe = backend.get_etf_holdings("SPY")['constituent'].tolist()
+        
+        New (Correct - true historical state):
+        >>> universe = frs.get_backtest_universe('2020-01-01')
+        
+        Examples
+        --------
+        >>> frs = FactorResearchSystem(api_key, universe=["SPY"])
+        >>> 
+        >>> # Get universe for a specific backtest date
+        >>> tickers = frs.get_backtest_universe('2008-09-15', top_n=500)
+        >>> print(f"Investable universe on 2008-09-15: {len(tickers)} stocks")
+        >>> 
+        >>> # Verify delisted stocks are included
+        >>> if 'LEH' in tickers:
+        ...     print("✓ PIT universe correctly includes Lehman Brothers")
+        >>> 
+        >>> # Use in backtest loop
+        >>> for date in backtest_dates:
+        ...     universe = frs.get_backtest_universe(date.strftime('%Y-%m-%d'))
+        ...     # ... run factor model on this date's universe
+        """
+        from .database import get_db_connection
+        
+        if not use_pit:
+            # Legacy behavior: use current ETF holdings (FLAWED - for comparison only)
+            _LOGGER.warning(
+                "Using current ETF holdings for backtesting - "
+                "this introduces survivorship bias!"
+            )
+            return self._resolve_symbols(self.original_symbols)
+        
+        # -------------------------------------------------------------------
+        # Point-in-Time Universe Lookup
+        # -------------------------------------------------------------------
+        try:
+            with get_db_connection(self.db_path) as con:
+                # Find the most recent generated universe prior to the simulation date
+                # This handles the case where universes are generated monthly
+                query = """
+                    SELECT ticker, dollar_volume
+                    FROM historical_universes
+                    WHERE date <= ?
+                    AND date = (
+                        SELECT MAX(date) 
+                        FROM historical_universes 
+                        WHERE date <= ?
+                    )
+                    ORDER BY dollar_volume DESC
+                    LIMIT ?
+                """
+                df = pd.read_sql(
+                    query, 
+                    con, 
+                    params=(current_sim_date, current_sim_date, top_n)
+                )
+                
+                if not df.empty:
+                    tickers = df['ticker'].tolist()
+                    _LOGGER.info(
+                        f"PIT Universe for {current_sim_date}: "
+                        f"{len(tickers)} tickers"
+                    )
+                    
+                    # Log if delisted stocks are present
+                    known_delisted = {'LEH', 'SIVB', 'FRC', 'WAMU', 'WB', 'WM'}
+                    found_delisted = known_delisted.intersection(set(tickers))
+                    if found_delisted:
+                        _LOGGER.info(f"PIT universe includes delisted: {found_delisted}")
+                    
+                    return tickers
+                    
+        except Exception as e:
+            _LOGGER.error(f"Error retrieving PIT universe: {e}")
+        
+        # -------------------------------------------------------------------
+        # Fallback: Build Universe if Not Found
+        # -------------------------------------------------------------------
+        _LOGGER.warning(
+            f"No PIT universe found for {current_sim_date}, "
+            f"building now (this may take several minutes)..."
+        )
+        
+        # Build the PIT universe using the parent DataBackend method
+        universe_df = self.build_point_in_time_universe(
+            date_str=current_sim_date, 
+            top_n=top_n
+        )
+        
+        if not universe_df.empty:
+            tickers = universe_df['ticker'].tolist()
+            _LOGGER.info(f"Built and stored PIT universe: {len(tickers)} tickers")
+            return tickers
+        
+        # Last resort: fall back to ETF holdings with strong warning
+        _LOGGER.error(
+            "CRITICAL: Could not build PIT universe. "
+            "Falling back to ETF holdings - results will be BIASED!"
+        )
+        return self._resolve_symbols(self.original_symbols)
+    
+    def verify_pit_universe(self, date_str: str, expected_delisted: List[str]) -> Dict[str, Any]:
+        """
+        Verify that the PIT universe includes expected delisted stocks.
+        
+        This is a QA method to validate that the PIT construction is working
+        correctly and not suffering from survivorship bias.
+        
+        Parameters
+        ----------
+        date_str : str
+            Date to check (e.g., '2008-09-15')
+        expected_delisted : List[str]
+            List of tickers that should be present (e.g., ['LEH'])
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Verification results with keys:
+            - 'pass': bool indicating if all expected stocks found
+            - 'found': List of expected stocks that were found
+            - 'missing': List of expected stocks that were missing
+            - 'universe_size': Total number of stocks in universe
+            - 'date': Date of the universe
+            
+        Examples
+        --------
+        >>> frs = FactorResearchSystem(api_key, universe=["SPY"])
+        >>> 
+        >>> # Test Lehman Brothers
+        >>> result = frs.verify_pit_universe('2008-09-15', ['LEH'])
+        >>> if result['pass']:
+        ...     print("✓ PIT universe correctly includes LEH")
+        ... else:
+        ...     print(f"✗ Missing: {result['missing']}")
+        >>> 
+        >>> # Test Silicon Valley Bank
+        >>> result = frs.verify_pit_universe('2023-01-01', ['SIVB'])
+        >>> assert result['pass'], "SIVB should be in Jan 2023 universe"
+        """
+        universe = self.get_backtest_universe(date_str, top_n=5000)
+        
+        universe_set = set(universe)
+        expected_set = set(expected_delisted)
+        
+        found = list(expected_set.intersection(universe_set))
+        missing = list(expected_set - universe_set)
+        
+        result = {
+            'pass': len(missing) == 0,
+            'found': found,
+            'missing': missing,
+            'universe_size': len(universe),
+            'date': date_str,
+            'expected_delisted': expected_delisted
+        }
+        
+        if result['pass']:
+            _LOGGER.info(
+                f"✓ PIT verification passed for {date_str}: "
+                f"all {len(expected_delisted)} expected tickers found"
+            )
+        else:
+            _LOGGER.error(
+                f"✗ PIT verification FAILED for {date_str}: "
+                f"missing {missing}"
+            )
+        
+        return result
+
+    # ========================================================= #
     # ----------------  INTERNAL • FACTOR MODELS  -------------- #
     # ========================================================= #
     # ---------- fundamental OLS ---------- #

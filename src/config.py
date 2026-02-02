@@ -88,6 +88,18 @@ class Configuration:
         self.DEFAULT_FACTOR_METHOD: str = os.getenv('DEFAULT_FACTOR_METHOD', 'PCA')
         self.DEFAULT_N_COMPONENTS: int = int(os.getenv('DEFAULT_N_COMPONENTS', '10'))
         
+        # Point-in-Time (PIT) Universe Configuration
+        # These settings control the "Time Machine" universe construction
+        # that eliminates survivorship bias in backtesting
+        self.PIT_UNIVERSE_TOP_N: int = int(os.getenv('PIT_UNIVERSE_TOP_N', '500'))
+        self.PIT_UNIVERSE_EXCHANGES: list[str] = os.getenv(
+            'PIT_UNIVERSE_EXCHANGES', 'NYSE,NASDAQ'
+        ).split(',')
+        self.PIT_VOLUME_WINDOW_DAYS: int = int(os.getenv('PIT_VOLUME_WINDOW_DAYS', '20'))
+        self.PIT_DEFAULT_TO_PIT: bool = os.getenv(
+            'PIT_DEFAULT_TO_PIT', 'true'
+        ).lower() in ('true', '1', 'yes')
+        
         # OpenAI settings
         self.OPENAI_MODEL: str = os.getenv('OPENAI_MODEL', 'gpt-5.2-mini')
         self.OPENAI_MAX_TOKENS: int = int(os.getenv('OPENAI_MAX_TOKENS', '500'))

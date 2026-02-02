@@ -462,6 +462,26 @@ def ensure_schema(db_path: Optional[Path] = None) -> None:
             )
         """)
         
+        # ============================================================================
+        # Point-in-Time (PIT) Universe Construction - Critical for eliminating
+        # survivorship bias and look-ahead bias in backtesting
+        # ============================================================================
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS historical_universes (
+                date TEXT,              -- The reference date (e.g., '2020-01-01')
+                ticker TEXT,            -- Symbol active on that date
+                asset_type TEXT,        -- 'Stock' or 'ETF'
+                status TEXT,            -- 'Active' or 'Delisted'
+                dollar_volume REAL,     -- 20-day Avg Dollar Volume (for liquidity filtering)
+                PRIMARY KEY (date, ticker)
+            )
+        """)
+        
+        # Index for fast retrieval during backtest loops
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_universe_date ON historical_universes(date)
+        """)
+        
         conn.commit()
         _LOGGER.debug("Database schema ensured")
 
