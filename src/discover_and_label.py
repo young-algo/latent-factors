@@ -358,13 +358,18 @@ def main():
     )
 
 
-def _fit(ret: pd.DataFrame, args: argparse.Namespace):
+def _fit(ret: pd.DataFrame, args: argparse.Namespace, cache_backend=None):
     """
     Apply the specified factor discovery method to return data.
     
     This helper function routes the factor discovery process to the appropriate
     method based on command-line arguments, providing a clean interface between
     the main workflow and the underlying factor discovery implementations.
+    
+    **CRITICAL**: All factor discovery methods now automatically residualize
+    returns against market (SPY) and sector ETFs BEFORE factor extraction.
+    This prevents the "Beta in Disguise" problem where raw returns just
+    rediscover market beta and sector exposures instead of true alpha factors.
     
     Parameters
     ----------
@@ -379,11 +384,17 @@ def _fit(ret: pd.DataFrame, args: argparse.Namespace):
         - method: Factor discovery method ("PCA", "ICA", "NMF", "AE")
         - k: Number of factors to extract
         
+    cache_backend : AlphaVantageBackend, optional
+        Pre-initialized backend for efficient benchmark data fetching.
+        If None, a new backend will be created.
+        
     Returns
     -------
     Tuple[pd.DataFrame, pd.DataFrame]
         factor_returns : pd.DataFrame
             Factor returns matrix with shape (T, K) where K = args.k
+            Factors are automatically orthogonal (zero cross-correlation)
+            and free of market/sector beta
         factor_loadings : pd.DataFrame  
             Factor loadings matrix with shape (N, K)
             
@@ -395,26 +406,27 @@ def _fit(ret: pd.DataFrame, args: argparse.Namespace):
       * "ICA" → StatMethod.ICA  
       * "NMF" → StatMethod.NMF
       
-    Method Characteristics
-    ---------------------
+    Automatic Processing Pipeline
+    ----------------------------
+    1. **Residualization** (always applied):
+       - Fetch SPY + sector ETF returns (XLK, XLF, XLE, etc.)
+       - Regress out market beta: R_i = α_i + β_i × R_mkt + ε_i
+       - Regress out sector exposure: ε_i = α'_i + Σ γ_ij × R_sector_j + η_i
+       - Use η_i (pure idiosyncratic returns) for factor discovery
+       
+    2. **Factor Discovery** (method-dependent):
+       - Apply PCA/ICA/NMF/AE to residualized returns
+       
+    3. **Orthogonalization** (for non-orthogonal methods):
+       - ICA/NMF/AE factors are orthogonalized post-discovery
+       - Ensures zero cross-correlation between factors
     
-    **Autoencoder ("AE")**:
-    - Non-linear factor discovery using neural networks
-    - Best for: Complex patterns, non-linear relationships
-    - Slower but more expressive than statistical methods
-    
-    **Statistical Methods**:
-    - Linear factor discovery using matrix decomposition
-    - Fast and interpretable
-    - PCA: Variance maximization (orthogonal factors)
-    - ICA: Statistical independence (non-orthogonal factors)
-    - NMF: Non-negative factors (parts-based decomposition)
-    
-    Error Handling
-    -------------
-    - Method validation handled by underlying implementations
-    - Invalid method names caught by StatMethod enum
-    - Data validation performed in factor discovery functions
+    Why Residualization Matters
+    --------------------------
+    Without residualization, PCA component 1 ≈ SPY (market beta), and 
+    components 2-5 ≈ sector ETFs. You are NOT discovering alpha - you are
+    rediscovering known systematic factors. Residualization ensures you
+    find true stock-specific (idiosyncratic) factors.
     
     Examples
     --------
@@ -422,25 +434,23 @@ def _fit(ret: pd.DataFrame, args: argparse.Namespace):
     >>> returns = prices.pct_change().dropna()
     >>> args = _parse()  # Contains method="PCA", k=5
     >>> factors, loadings = _fit(returns, args)
-    >>> print(f"Generated {factors.shape[1]} factors")
-    
-    >>> # Method routing examples:
-    >>> # args.method="PCA" → statistical_factors(..., method=StatMethod.PCA)
-    >>> # args.method="AE" → autoencoder_factors(..., k=args.k)
+    >>> print(f"Generated {factors.shape[1]} residualized factors")
+    >>> # factors are orthogonal and free of market/sector beta
     
     Notes
     -----
     - This function serves as a clean interface layer
     - Simplifies method selection in the main workflow
     - Ensures consistent parameter passing to factor discovery methods
-    - Method-specific parameters use sensible defaults
+    - Automatic residualization and orthogonalization are always applied
     """
     if args.method == "AE":
-        return autoencoder_factors(ret, k=args.k)
+        return autoencoder_factors(ret, k=args.k, cache_backend=cache_backend)
     else:
         return statistical_factors(ret,
                                    n_components=args.k,
-                                   method=StatMethod[args.method])
+                                   method=StatMethod[args.method],
+                                   cache_backend=cache_backend)
 
 
 if __name__ == "__main__":

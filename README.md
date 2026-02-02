@@ -1,50 +1,46 @@
 # Equity Factors Research System
 
-A comprehensive quantitative finance research platform for factor discovery, optimization, and backtesting. This system combines market data acquisition, factor modeling, and performance evaluation with innovative LLM-powered factor naming. Designed for active traders who want to understand what's *actually* driving returns in their portfolios and translate factor insights into tradeable stock baskets.
-
-## What's New
-
-### 🎯 Factor Weight Optimization
-Automatically find optimal factor blends that maximize Sharpe ratio using Bayesian optimization, with support for walk-forward validation to avoid overfitting.
-
-### 📊 Tradeable Basket Generation  
-Convert factor weights into specific long/short stock positions for immediate execution.
-
-### 🤖 LLM-Powered Factor Naming
-Automatically generate human-readable factor names during optimization to understand what each discovered factor represents.
-
-### 🗄️ Robust Database Architecture
-Complete re-architecture of SQLite handling eliminates "database is locked" errors with per-operation connections and automatic WAL migration.
-
-### 🔧 Unified CLI
-Single entry point for all functionality with consistent command structure.
+A comprehensive quantitative finance research platform for factor discovery, optimization, and backtesting. This system combines market data acquisition, factor modeling, and performance evaluation with LLM-powered factor naming. Designed for active traders who want to understand what is driving returns in their portfolios and translate factor insights into tradeable stock baskets.
 
 ## Overview
 
 This system helps active traders answer critical questions:
-- **What hidden factors are driving my universe?** (Factor Discovery)
-- **How should I optimally weight factors for maximum risk-adjusted return?** (Factor Optimization)
-- **Which specific stocks should I buy/sell to implement my factor view?** (Basket Generation)
-- **Is now a good time to buy/sell specific factors?** (Trading Signals)
-- **Which stocks should I long/short based on factor exposures?** (Cross-Sectional Analysis)
-- **What market regime are we in and how should I position?** (Regime Detection)
-- **Would my strategy have worked historically?** (Backtesting)
+- What hidden factors are driving my universe? (Factor Discovery)
+- How should I optimally weight factors for maximum risk-adjusted return? (Factor Optimization)
+- Which specific stocks should I buy/sell to implement my factor view? (Basket Generation)
+- Is now a good time to buy/sell specific factors? (Trading Signals)
+- Which stocks should I long/short based on factor exposures? (Cross-Sectional Analysis)
+- What market regime are we in and how should I position? (Regime Detection)
+- Would my strategy have worked historically? (Backtesting)
 
 ## Key Features
 
 | Feature | What It Does | Why Traders Care |
 |---------|--------------|------------------|
-| **Factor Discovery** | Extracts latent factors using PCA, ICA, NMF, or Autoencoders | Understand the true drivers of returns beyond obvious sector ETFs |
-| **Factor Optimization** | Bayesian optimization of factor weight blends | Maximize Sharpe ratio with data-driven weightings |
-| **Basket Generation** | Convert factor weights to specific stock positions | Go from abstract factors to tradeable long/short baskets |
-| **LLM Factor Naming** | Auto-generates intuitive names using GPT models | Transform cryptic "F3" into "Small-Cap Growth Momentum" |
-| **Trading Signals** | RSI, MACD, ADX, extreme value alerts, z-scores | Time factor entries/exits with confidence |
-| **Cross-Sectional Analysis** | Rank stocks by composite factor scores | Generate quantifiable long/short candidates |
-| **Regime Detection** | HMM-based market state identification | Adjust factor exposure based on bull/bear/volatile conditions |
-| **Signal Backtesting** | Walk-forward testing with performance attribution | Validate strategies before risking capital |
-| **Interactive Dashboard** | Streamlit UI for real-time monitoring | Visual factor monitoring without coding |
+| Factor Discovery | Extracts latent factors using PCA, ICA, NMF, or Autoencoders from residualized returns | Discover true alpha factors, not just market beta and sector exposures |
+| Factor Optimization | Bayesian optimization of factor weight blends | Maximize Sharpe ratio with data-driven weightings |
+| Basket Generation | Convert factor weights to specific stock positions | Go from abstract factors to tradeable long/short baskets |
+| LLM Factor Naming | Auto-generates intuitive names using GPT models | Transform cryptic "F3" into "Small-Cap Growth Momentum" |
+| Trading Signals | RSI, MACD, ADX, extreme value alerts, z-scores | Time factor entries/exits with confidence |
+| Cross-Sectional Analysis | Rank stocks by composite factor scores | Generate quantifiable long/short candidates |
+| Regime Detection | HMM-based market state identification | Adjust factor exposure based on bull/bear/volatile conditions |
+| Signal Backtesting | Walk-forward testing with performance attribution | Validate strategies before risking capital |
+| Interactive Dashboard | Streamlit UI for real-time monitoring | Visual factor monitoring without coding |
 
----
+## Factor Discovery with Residualization
+
+The factor discovery system automatically residualizes stock returns against market (SPY) and sector ETFs before extracting latent factors. This is critical for alpha generation:
+
+**The Problem:** Running PCA/ICA on raw returns mathematically guarantees that the first principal component will be the Market Factor (Beta), and components 2-5 will be Sector factors. Without residualization, you are rediscovering SPY and sector ETFs, not true alpha.
+
+**The Solution:** Before factor extraction, the system:
+1. Regresses stock returns against SPY: `R_i = alpha_i + beta_i * R_mkt + epsilon_i`
+2. Regresses residuals against sector ETFs: `epsilon_i = alpha'_i + sum(gamma_ij * R_sector_j) + eta_i`
+3. Runs factor discovery on `eta_i` (pure idiosyncratic returns)
+
+**Sector ETFs Used:** XLK (Technology), XLF (Financials), XLE (Energy), XLI (Industrials), XLP (Consumer Staples), XLY (Consumer Discretionary), XLB (Materials), XLU (Utilities), XLRE (Real Estate), XLC (Communication Services)
+
+**Factor Orthogonality:** Non-orthogonal methods (ICA, NMF, Autoencoder) are automatically orthogonalized post-discovery using symmetric SVD-based orthogonalization. This prevents optimizers from double-counting correlated signals.
 
 ## Quick Start
 
@@ -75,11 +71,9 @@ cp .env.example .env
 # OPENAI_API_KEY=your-openai-key
 ```
 
----
-
 ## Usage Guide for Active Traders
 
-### 0. Unified CLI Quick Reference
+### Unified CLI Quick Reference
 
 All functionality is accessible through the unified CLI:
 
@@ -99,19 +93,17 @@ uv run python -m src clean         # Clean cache files
 uv run python -m src <command> --help
 ```
 
----
-
-### 1. Factor Discovery & Naming
+### Factor Discovery and Naming
 
 **What it does:** Automatically discovers latent factors in any ETF or stock universe and gives them meaningful names.
 
-**Why use it:** Traditional ETFs (XLK, XLF, etc.) tell you what sector a stock is in, but not what's *actually* driving returns.
+**Why use it:** Discovers true alpha factors from residualized returns, not just market beta and sector exposures.
 
 ```bash
 # Discover factors in SPY using PCA
 uv run python -m src discover --symbols SPY --method PCA -k 10
 
-# Analyze with ICA for regime-sensitive factors
+# Analyze with ICA for regime-sensitive factors (auto-orthogonalized)
 uv run python -m src discover --symbols SPY --method ICA -k 8
 
 # Multi-ETF analysis for broader factor discovery
@@ -124,16 +116,14 @@ uv run python -m src discover --symbols "SPY,QQQ,IWM" --method PCA -k 12
 - `factor_loadings.csv` - Stock exposures to each factor
 - `cumulative_factor_returns.png` - Visual performance chart
 
----
-
-### 2. Factor Weight Optimization ⭐ IMPROVED
+### Factor Weight Optimization
 
 **What it does:** Finds the optimal blend of factors that maximizes Sharpe ratio using advanced optimization techniques.
 
-**Why use it:** Instead of equal-weighting factors, let the data tell you which factors deserve higher/lower weights. The system now uses **Nested Walk-Forward Optimization** to prevent overfitting, ensuring that the strategies discovered in-sample actually generalize out-of-sample.
+**Why use it:** Instead of equal-weighting factors, let the data tell you which factors deserve higher/lower weights. The system uses Nested Walk-Forward Optimization to prevent overfitting, ensuring that the strategies discovered in-sample actually generalize out-of-sample.
 
-**Key Improvements:**
-- **Anti-Overfitting Logic:** Splits lookback windows into Estimation and Validation sets. Weights are trained on one and optimized on the other, eliminating the "double-dipping" bias where the model simply picks past winners.
+**Key Features:**
+- **Anti-Overfitting Logic:** Splits lookback windows into Estimation and Validation sets. Weights are trained on one and optimized on the other, eliminating the double-dipping bias where the model simply picks past winners.
 - **High Performance:** Weight generation for all methods (Risk Parity, Min-Var, etc.) is pre-calculated once, making the meta-optimization 10-50x faster.
 - **Realistic Backtesting:** Simulates daily weight drift and buy-and-hold returns between rebalancing periods, providing a more accurate view of real-world performance than simple constant-mix models.
 
@@ -156,8 +146,8 @@ uv run python -m src optimize --universe VTHR \
 ```
 
 **Available Factor Methods:**
-- `pca` - Principal Component Analysis (default, stable)
-- `ica` - Independent Component Analysis (good for regime detection)
+- `pca` - Principal Component Analysis (default, stable, orthogonal by construction)
+- `ica` - Independent Component Analysis (regime-sensitive, auto-orthogonalized)
 - `sparse_pca` - Sparse PCA (interpretable loadings)
 - `factor` - Factor Analysis (classical approach)
 - `fundamental` - Fama-French style (P/E, market cap, etc.)
@@ -183,9 +173,7 @@ uv run python -m src optimize --universe VTHR \
 - `*_results.json` - Full optimization results with performance metrics
 - `*_factor_names.csv` - Human-readable factor names (if --name-factors)
 
----
-
-### 3. Generate Tradeable Basket ⭐ NEW
+### Generate Tradeable Basket
 
 **What it does:** Converts optimal factor weights into specific long/short stock positions.
 
@@ -225,9 +213,7 @@ uv run python -m src basket \
 - `--capital 100000` - Total capital to allocate
 - `--net-exposure 1.0` - Net exposure (1.0 = 100% long, 0.0 = market neutral, -1.0 = 100% short)
 
----
-
-### 4. Trading Signals
+### Trading Signals
 
 **What it does:** Generates actionable buy/sell signals based on factor momentum, extreme values, and cross-sectional rankings.
 
@@ -246,14 +232,12 @@ uv run python -m src signals cross-section --universe SPY --top-pct 0.1 --bottom
 
 | Signal | Best For | When to Use |
 |--------|----------|-------------|
-| **RSI** | Timing mean reversion | RSI > 70 = overbought; RSI < 30 = oversold |
-| **MACD** | Trend confirmation | Bullish crossover = enter long |
-| **ADX** | Trend strength | ADX > 25 = strong trend; ADX < 20 = weak trend |
-| **Z-Score** | Statistical extremes | \|z\| > 2 = rare event, likely to revert |
+| RSI | Timing mean reversion | RSI > 70 = overbought; RSI < 30 = oversold |
+| MACD | Trend confirmation | Bullish crossover = enter long |
+| ADX | Trend strength | ADX > 25 = strong trend; ADX < 20 = weak trend |
+| Z-Score | Statistical extremes | |z| > 2 = rare event, likely to revert |
 
----
-
-### 5. Market Regime Detection
+### Market Regime Detection
 
 **What it does:** Uses Hidden Markov Models to identify market regimes and recommend factor allocations.
 
@@ -266,13 +250,11 @@ uv run python -m src regime detect --universe SPY --regimes 3 --predict 5
 
 | Regime | Characteristics | Optimal Strategy |
 |--------|-----------------|------------------|
-| **Low Vol Bull** | Rising prices, low volatility | Overweight momentum, growth |
-| **High Vol Bear** | Declining, choppy | Maximum defensive, minimum volatility |
-| **Crisis** | Extreme volatility | Risk-off, cash/quality focus |
+| Low Vol Bull | Rising prices, low volatility | Overweight momentum, growth |
+| High Vol Bear | Declining, choppy | Maximum defensive, minimum volatility |
+| Crisis | Extreme volatility | Risk-off, cash/quality focus |
 
----
-
-### 6. Signal Backtesting
+### Signal Backtesting
 
 **What it does:** Validates signal efficacy using walk-forward testing.
 
@@ -283,20 +265,16 @@ uv run python -m src backtest --universe SPY \
   --optimize --report
 ```
 
----
-
-### 7. Interactive Dashboard
+### Interactive Dashboard
 
 ```bash
 # Launch the Streamlit dashboard
 uv run python -m src dashboard
 ```
 
----
-
 ## Complete Trading Workflow Example
 
-### Discover → Optimize → Trade
+### Discover, Optimize, Trade
 
 ```bash
 # Step 1: Discover factors in your universe
@@ -335,18 +313,16 @@ uv run python -m src signals extremes --universe SPY --trade
 uv run python -m src signals cross-section --universe SPY --top-pct 0.05
 ```
 
----
-
 ## Project Structure
 
 ```
 equity-factors/
 ├── src/
-│   ├── __main__.py                 # Unified CLI entry point ⭐ NEW
-│   ├── database.py                 # Robust SQLite management ⭐ NEW
+│   ├── __main__.py                 # Unified CLI entry point
+│   ├── database.py                 # Robust SQLite management
 │   ├── alphavantage_system.py      # Data backend with caching
 │   ├── research.py                 # Main research system
-│   ├── factor_optimization.py      # Factor weight optimization ⭐ NEW
+│   ├── factor_optimization.py      # Factor weight optimization
 │   ├── factor_weighting.py         # Factor weighting methods
 │   ├── latent_factors.py           # Factor discovery (PCA, ICA, NMF, AE)
 │   ├── factor_labeler.py           # LLM-powered factor naming
@@ -362,8 +338,6 @@ equity-factors/
 ├── pyproject.toml                  # Dependencies
 └── README.md                       # This file
 ```
-
----
 
 ## Configuration
 
@@ -392,9 +366,7 @@ The system implements intelligent rate limiting:
 - First run downloads all data; subsequent runs use cache
 - Free Alpha Vantage tier: 25 calls/day (premium recommended)
 
----
-
-## Database Architecture ⭐ NEW
+## Database Architecture
 
 The system uses a robust SQLite architecture with:
 
@@ -416,17 +388,13 @@ uv run python -c "from src.database import optimize_database; optimize_database(
 uv run python -m src clean --all
 ```
 
----
-
 ## Performance Notes
 
 - **NMF Performance:** For large ETFs (2000+ stocks), NMF can be slow. Use PCA or ICA.
 - **Autoencoder:** Requires PyTorch; benefits from GPU acceleration.
 - **Caching:** First run downloads data; subsequent runs use SQLite cache.
-- **Memory:** Large universes (1000+ stocks) require ~2GB RAM.
+- **Memory:** Large universes (1000+ stocks) require approximately 2GB RAM.
 - **ICA Convergence:** May not converge with very large universes (>2000 stocks).
-
----
 
 ## Contributing
 
@@ -436,13 +404,9 @@ uv run python -m src clean --all
 4. Add tests
 5. Submit a pull request
 
----
-
 ## License
 
 [Add your license here]
-
----
 
 ## Support
 
@@ -450,8 +414,6 @@ For issues and questions:
 - Check existing issues in the repository
 - Create a new issue with detailed description
 - Include error messages and environment details
-
----
 
 ## Risk Disclaimer
 
