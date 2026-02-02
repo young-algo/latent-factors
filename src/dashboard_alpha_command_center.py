@@ -1521,10 +1521,10 @@ def render_factor_lab(data: dict, analyzers: dict):
                                 st.session_state['llm_factor_names'] = {}
                             st.session_state['llm_factor_names'][selected_factor] = result.get('short_name', '')
                             
-                            if factor_name_obj.high_exposure_desc:
-                                st.caption(f"📈 High: {factor_name_obj.high_exposure_desc}")
-                            if factor_name_obj.low_exposure_desc:
-                                st.caption(f"📉 Low: {factor_name_obj.low_exposure_desc}")
+                            if result.get('high_exposure_desc'):
+                                st.caption(f"📈 High: {result['high_exposure_desc']}")
+                            if result.get('low_exposure_desc'):
+                                st.caption(f"📉 Low: {result['low_exposure_desc']}")
                                 
                         except Exception as e:
                             st.error(f"LLM naming failed: {e}")
