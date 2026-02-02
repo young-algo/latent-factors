@@ -1234,8 +1234,13 @@ class FactorResearchSystem(DataBackend):
             # Calculate factor returns in ORIGINAL return space (not standardized)
             # Factor return = weighted average of stock returns, where weights are loadings
             today_rets = rets.iloc[t]
-            # For each factor, calculate return of portfolio weighted by loadings
-            factor_ret = today_rets.values @ load.values
+            
+            # Normalize loadings so they sum to 1 for each factor (dollar-neutral long-short)
+            # This prevents amplification by the number of stocks
+            load_normalized = load.div(load.abs().sum())
+            
+            # Calculate factor return as weighted portfolio return
+            factor_ret = today_rets.values @ load_normalized.values
             
             fac_rets.append(factor_ret)
             loads.append(load)
