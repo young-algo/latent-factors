@@ -64,7 +64,7 @@ Requirements
 -----------
 - **Environment**: OPENAI_API_KEY environment variable
 - **API Access**: OpenAI API account with sufficient credits
-- **Models**: Compatible with gpt-5.2-mini, gpt-5.2, gpt-5.2-pro
+- **Models**: Compatible with gpt-5-mini, gpt-5.2, gpt-5.2-pro
 - **Data**: Fundamental data with sector, market cap, financial ratios
 
 Performance Characteristics
@@ -237,7 +237,7 @@ def ask_llm(factor_id: str,
             existing_names: Optional[List[str]] = None,
             temperature: float = 0.4,
             max_tokens: int = 200,
-            model: str = "gpt-5.2-mini",
+            model: str = "gpt-5-mini",
             max_retries: int = 3) -> FactorName:
     """
     Generate structured factor name using LLM with comprehensive error handling.
@@ -260,7 +260,7 @@ def ask_llm(factor_id: str,
         LLM temperature parameter (lower for more consistent output)
     max_tokens : int, default 200
         Maximum tokens in response (JSON needs more space)
-    model : str, default "gpt-5.2-mini"
+    model : str, default "gpt-5-mini"
         OpenAI model to use
     max_retries : int, default 3
         Maximum retry attempts for API calls
@@ -539,7 +539,7 @@ def validate_api_key() -> bool:
         # Simple test call to validate key
         test_client = OpenAI(api_key=openai_api_key)
         test_client.chat.completions.create(
-            model="gpt-5.2-mini",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "test"}],
             max_tokens=1
         )

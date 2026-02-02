@@ -600,7 +600,7 @@ Examples:
     name_parser.add_argument('--components', type=int, default=8, help='Number of factors')
     name_parser.add_argument('--no-expand', dest='expand_etfs', action='store_false', help='Disable ETF expansion')
     name_parser.add_argument('-f', '--factor', help='Name specific factor only')
-    name_parser.add_argument('--model', default='gpt-5.2-mini', help='OpenAI model to use')
+    name_parser.add_argument('--model', default='gpt-5-mini', help='OpenAI model to use')
     name_parser.add_argument('--top-n', type=int, default=10, help='Number of stocks to show')
     name_parser.add_argument('--interactive', '-i', action='store_true', help='Interactive approval mode')
     name_parser.add_argument('--review', '-r', action='store_true', help='Review all names')

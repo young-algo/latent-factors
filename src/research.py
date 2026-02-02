@@ -596,7 +596,7 @@ class FactorResearchSystem(DataBackend):
 
     # ---------------- LLM naming ---------------- #
     def name_factors(
-        self, model: str = "gpt-5.2-mini", top_n: int = 8,
+        self, model: str = "gpt-5-mini", top_n: int = 8,
         force_refresh: bool = False, cache_path: str = "factor_names.json"
     ) -> dict[str, str]:
         """
@@ -609,10 +609,10 @@ class FactorResearchSystem(DataBackend):
         
         Parameters
         ----------
-        model : str, default "gpt-5.2-mini"
+        model : str, default "gpt-5-mini"
             OpenAI model to use for factor naming.
-            Options: "gpt-5.2-mini", "gpt-5.2", "gpt-5.2-pro"
-            Recommendation: "gpt-5.2-mini" for cost-effectiveness
+            Options: "gpt-5-mini", "gpt-5.2", "gpt-5.2-pro"
+            Recommendation: "gpt-5-mini" for cost-effectiveness
             
         top_n : int, default 8
             Number of top positive and negative stocks to analyze per factor.
@@ -662,7 +662,7 @@ class FactorResearchSystem(DataBackend):
         - **API Cost**: ~$0.01-0.05 per factor depending on model
         - **Caching**: Significantly reduces costs for repeated analysis
         - **Batch Processing**: All factors sent in single conversation
-        - **Model Choice**: gpt-5.2-mini is cost-effective for most use cases
+        - **Model Choice**: gpt-5-mini is cost-effective for most use cases
         
         Error Handling
         -------------

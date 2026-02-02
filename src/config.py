@@ -101,7 +101,7 @@ class Configuration:
         ).lower() in ('true', '1', 'yes')
         
         # OpenAI settings
-        self.OPENAI_MODEL: str = os.getenv('OPENAI_MODEL', 'gpt-5.2-mini')
+        self.OPENAI_MODEL: str = os.getenv('OPENAI_MODEL', 'gpt-5-mini')
         self.OPENAI_MAX_TOKENS: int = int(os.getenv('OPENAI_MAX_TOKENS', '500'))
     
     def validate(self, require_alpha_vantage: bool = True) -> None:

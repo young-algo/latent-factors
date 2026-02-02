@@ -27,6 +27,64 @@ This system helps active traders answer critical questions:
 | Signal Backtesting | Walk-forward testing with performance attribution | Validate strategies before risking capital |
 | PIT Universe Construction | Reconstructs historical market state including delisted stocks | Eliminate survivorship bias from backtests |
 | Interactive Dashboard | Streamlit UI for real-time monitoring | Visual factor monitoring without coding |
+| **Alpha Command Center** | Institutional-grade PM dashboard | Risk attribution, explainability, execution |
+
+## Alpha Command Center: Factor Operations Terminal
+
+An institutional-grade dashboard designed for Portfolio Managers with $1B+ AUM. Shifts design philosophy from **"Research Tool"** (exploring data) to **"Command Center"** (monitoring risk, understanding drivers, and executing mandates).
+
+### Launch the Dashboard
+
+```bash
+# Using the launch script (recommended)
+./scripts/launch_alpha_command_center.sh
+
+# Or manually
+streamlit run src/dashboard_alpha_command_center.py
+```
+
+### Core Philosophy
+
+1. **Alpha vs. Beta Separation:** Every screen clearly distinguishes between "Market Drift" and "True Latent Alpha"
+2. **Explainability First:** Never show "Factor 3." Show "Factor 3 (Tech-Momentum)" with breakdown of *why* it exists
+3. **Actionable Intelligence:** Charts lead to decisions (Rebalance, Hedge, or De-risk)
+
+### Dashboard Sections
+
+#### Section 1: "Morning Coffee" Header
+Immediate situational awareness for the PM:
+- **Market Regime Gauge:** HMM-based gauge showing current state ("Low Vol Bull" vs "Crisis")
+- **Active Risk (Tracking Error):** vs Benchmark
+- **Estimated Beta:** Must be near 0.0 for Market Neutral fund
+- **Unexplained PnL:** The "Ghost" alpha or risk not explained by factors
+- **Information Ratio:** Risk-adjusted alpha metric
+
+#### Section 2: The "Factor Lab"
+Explainable AI (XAI) for factor understanding:
+- **Factor DNA Table:** Master table with Alpha Purity scores (flags "Beta in Disguise")
+  - Auto-generated factor names based on loading analysis
+  - Theme classification (Concentrated Exposure, Statistical Arbitrage, etc.)
+  - Crowding scores based on concentration metrics
+- **Factor X-Ray:** Drill-down with semantic description, style attribution, sector heatmap
+  - **Investment Rationale:** Actionable description of what the factor captures
+  - **Top Exposures:** Top 5 long/short positions with actual loading values
+  - **Conviction Score:** High/Moderate/Low based on dispersion metrics
+  - **🤖 LLM Enhancement:** Button to call OpenAI API for intuitive naming
+- **Style Attribution:** Regression vs Fama-French factors (Value, Momentum, Quality, etc.)
+- **Liquidity Warnings:** Pre-trade execution alerts
+
+#### Section 3: Portfolio Constructor
+Execution and "What-If" analysis:
+- **Optimizer Sandbox:** Stress-test with turnover constraints, beta limits
+- **Efficient Frontier:** Visualize Sharpe vs Turnover trade-off
+- **Trade Basket Preview:** Top Buys/Sells with liquidity warnings
+- **% ADV Alerts:** Flags trades exceeding 2% of Average Daily Volume
+
+#### Section 4: Risk & Drawdown
+Risk monitoring and attribution:
+- **Factor Risk Metrics:** VaR, CVaR, Max Drawdown per factor
+- **Drawdown Chart:** Visual tracking of underwater periods
+- **Skewness/Kurtosis:** Tail risk indicators
 
 ## Factor Discovery with Residualization
 
@@ -89,7 +147,7 @@ biased_universe = backend.get_etf_holdings("SPY")['constituent'].tolist()
 # Returns: ['AAPL', 'MSFT', 'NVDA', ...]  # LEH missing!
 
 # ✅ CORRECT: True historical state (unbiased)
- unbiased_universe = frs.get_backtest_universe('2008-09-15')
+unbiased_universe = frs.get_backtest_universe('2008-09-15')
 # Returns: ['AAPL', 'MSFT', 'LEH', ...]  # LEH included!
 ```
 
