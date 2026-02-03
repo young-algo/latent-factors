@@ -30,13 +30,16 @@ def _find_and_load_env():
     current = Path(__file__).parent
     for _ in range(5):  # Search up to 5 levels up
         env_file = current / '.env'
-        if env_file.exists():
-            try:
-                from dotenv import load_dotenv
-                load_dotenv(env_file)
-                return env_file
-            except ImportError:
-                pass  # dotenv not installed
+        try:
+            if env_file.exists():
+                try:
+                    from dotenv import load_dotenv
+                    load_dotenv(env_file)
+                    return env_file
+                except ImportError:
+                    pass  # dotenv not installed
+        except PermissionError:
+            pass  # Ignore permission errors when searching for .env
         current = current.parent
     
     # Try loading from current working directory as fallback
@@ -101,8 +104,11 @@ class Configuration:
         ).lower() in ('true', '1', 'yes')
         
         # OpenAI settings
+        # Using gpt-5-mini as default base model (Reasoning).
+        # Alternative: gpt-5.2 (Advanced Reasoning).
+        # Legacy/Outdated: gpt-4, gpt-4-turbo, o1.
         self.OPENAI_MODEL: str = os.getenv('OPENAI_MODEL', 'gpt-5-mini')
-        self.OPENAI_MAX_TOKENS: int = int(os.getenv('OPENAI_MAX_TOKENS', '500'))
+        self.OPENAI_MAX_COMPLETION_TOKENS: int = int(os.getenv('OPENAI_MAX_COMPLETION_TOKENS', '500'))
     
     def validate(self, require_alpha_vantage: bool = True) -> None:
         """

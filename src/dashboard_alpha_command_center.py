@@ -799,7 +799,7 @@ def create_enriched_llm_prompt(
                 profile += f"\n      Sector: {sector} | Industry: {industry}"
             
             desc = f.get('Description', '')
-            if desc:
+            if desc and isinstance(desc, str):
                 first_sentence = desc.split('.')[0][:150]
                 profile += f"\n      Business: {first_sentence}"
             
@@ -1197,47 +1197,34 @@ def render_factor_lab(data: dict, analyzers: dict):
                         progress_bar = st.progress(0)
                         status_text = st.empty()
                         
-                        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                        from src.factor_labeler import batch_name_factors
                         
-                        for i, factor in enumerate(returns.columns):
-                            if factor in loadings.columns:
-                                status_text.text(f"Naming factor {i+1}/{len(returns.columns)}: {factor}...")
-                                
-                                top_pos = loadings[factor].nlargest(10)
-                                top_neg = loadings[factor].nsmallest(10)
-                                
-                                # Create enriched prompt with available fundamentals and returns
-                                enriched_prompt = create_enriched_llm_prompt(
-                                    factor_id=factor,
-                                    loadings=loadings[factor],
-                                    fundamentals=fundamentals_all,
-                                    factor_returns=returns[factor] if factor in returns.columns else None,
-                                    all_returns=returns
-                                )
-                                
-                                try:
-                                    response = client.chat.completions.create(
-                                        model="gpt-5-mini",
-                                        messages=[
-                                            {"role": "system", "content": "You are a quantitative finance expert. Provide specific, insightful factor names based on company fundamentals."},
-                                            {"role": "user", "content": enriched_prompt}
-                                        ],
-                                        temperature=0.4,
-                                        max_tokens=400,
-                                        response_format={"type": "json_object"}
-                                    )
-                                    
-                                    content = response.choices[0].message.content
-                                    result = json.loads(content)
-                                    
-                                    llm_names[factor] = result.get('short_name', f'{factor}: Unnamed')
-                                    llm_results[factor] = result
-                                    
-                                except Exception as e:
-                                    st.warning(f"Failed to name {factor}: {e}")
-                                    llm_names[factor] = f"{factor}: Error"
-                            
-                            progress_bar.progress((i + 1) / len(returns.columns))
+                        # Step 3: Name each factor with enriched data using batch processor
+                        st.info(f"Starting batch naming for {len(loadings.columns)} factors using {config.OPENAI_MODEL}...")
+                        
+                        # Filter loadings to only those present in returns (active factors)
+                        active_factors = [f for f in returns.columns if f in loadings.columns]
+                        active_loadings = loadings[active_factors]
+                        
+                        # Call batch processing
+                        llm_names_map = batch_name_factors(
+                            factor_exposures=active_loadings,
+                            fundamentals=fundamentals_all,
+                            top_n=10,
+                            model=config.OPENAI_MODEL
+                        )
+                        
+                        # Process results into display format
+                        for factor, fname in llm_names_map.items():
+                             llm_names[factor] = fname.short_name
+                             llm_results[factor] = {
+                                 'short_name': fname.short_name,
+                                 'description': fname.description,
+                                 'theme': fname.theme,
+                                 'confidence': fname.confidence
+                             }
+                        
+                        progress_bar.progress(1.0)
                         
                         status_text.empty()
                         
@@ -1488,43 +1475,30 @@ def render_factor_lab(data: dict, analyzers: dict):
                             with st.expander("📤 View Enriched LLM Prompt (includes style attribution + sector exposure)"):
                                 st.code(enriched_prompt, language="text")
                             
-                            # Step 3: Call LLM with enriched prompt
-                            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-                            
-                            response = client.chat.completions.create(
-                                model="gpt-5-mini",
-                                messages=[
-                                    {"role": "system", "content": "You are a quantitative finance expert. Provide specific, insightful factor names based on company fundamentals, style attribution, and sector exposure."},
-                                    {"role": "user", "content": enriched_prompt}
-                                ],
-                                temperature=0.4,
-                                max_tokens=400,
-                                response_format={"type": "json_object"}
+                            # Step 3: Call LLM with centralized logic
+                            result_obj = ask_llm(
+                                factor_id=selected_factor,
+                                top_pos=top_pos.head(10).index.tolist(),
+                                top_neg=top_neg.head(10).index.tolist(),
+                                fundamentals=fundamentals,
+                                model=config.OPENAI_MODEL
                             )
                             
-                            # Parse response
-                            content = response.choices[0].message.content
-                            result = json.loads(content)
-                            
                             # Display results
-                            st.success(f"**{result.get('short_name', 'N/A')}**")
-                            st.info(result.get('description', ''))
-                            st.caption(f"Theme: **{result.get('theme', 'N/A')}** | Confidence: **{result.get('confidence', 'N/A')}**")
+                            st.success(f"**{result_obj.short_name}**")
+                            st.info(result_obj.description)
+                            st.caption(f"Theme: **{result_obj.theme}** | Confidence: **{result_obj.confidence}**")
                             
-                            if result.get('high_exposure_desc'):
-                                st.caption(f"📈 Longs: {result['high_exposure_desc']}")
-                            if result.get('low_exposure_desc'):
-                                st.caption(f"📉 Shorts: {result['low_exposure_desc']}")
+                            if result_obj.rationale:
+                                st.markdown(f"**Rationale:** {result_obj.rationale}")
                             
                             # Store in session state
                             if 'llm_factor_names' not in st.session_state:
                                 st.session_state['llm_factor_names'] = {}
-                            st.session_state['llm_factor_names'][selected_factor] = result.get('short_name', '')
+                            st.session_state['llm_factor_names'][selected_factor] = result_obj.short_name
                             
-                            if result.get('high_exposure_desc'):
-                                st.caption(f"📈 High: {result['high_exposure_desc']}")
-                            if result.get('low_exposure_desc'):
-                                st.caption(f"📉 Low: {result['low_exposure_desc']}")
+                            # Force a rerun to update the UI immediately
+                            st.rerun()
                                 
                         except Exception as e:
                             st.error(f"LLM naming failed: {e}")
@@ -1717,7 +1691,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
                 max_value=1.0,
                 value=0.20,
                 step=0.05,
-                format="%.0%%"
+                format="%.0f%%"
             )
             
             max_beta = st.slider(
@@ -1734,7 +1708,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
                 max_value=0.20,
                 value=0.05,
                 step=0.01,
-                format="%.0%%"
+                format="%.0f%%"
             )
             
             gross_leverage = st.slider(
