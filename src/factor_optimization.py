@@ -187,7 +187,8 @@ class SharpeOptimizer:
         self,
         factor_returns: pd.DataFrame,
         factor_loadings: Optional[pd.DataFrame] = None,
-        risk_free_rate: float = 0.0
+        risk_free_rate: float = 0.0,
+        reset_index: bool = True
     ):
         """
         Initialize the SharpeOptimizer.
@@ -195,22 +196,39 @@ class SharpeOptimizer:
         Parameters
         ----------
         factor_returns : pd.DataFrame
-            Factor returns matrix (T×K)
+            Factor returns matrix (T×K). Can have non-contiguous index
+            (e.g., regime-filtered data).
         factor_loadings : pd.DataFrame, optional
             Factor loadings matrix (N×K)
         risk_free_rate : float, default 0.0
             Risk-free rate for Sharpe calculation
+        reset_index : bool, default True
+            If True, resets the index of factor_returns to handle 
+            non-contiguous indices (e.g., from regime filtering).
+            This is important for RS-MVO (Regime-Switching Mean-Variance Optimization)
+            where returns are filtered by regime state.
         """
+        # Handle non-contiguous indices (e.g., from regime filtering)
+        # We preserve the original index for reference but reset for calculations
         self.returns = factor_returns.copy()
+        if reset_index:
+            # Store original index for reference
+            self._original_index = self.returns.index.copy()
+            # Reset index for calculations (positions 0, 1, 2, ...)
+            self.returns = self.returns.reset_index(drop=True)
+        else:
+            self._original_index = None
+            
         self.loadings = factor_loadings.copy() if factor_loadings is not None else None
         self.risk_free_rate = risk_free_rate
         self.n_factors = factor_returns.shape[1]
         self.factor_names = list(factor_returns.columns)
         
         # Initialize weighter for method-specific weights
+        # Note: weighter also needs regime-filtered returns with reset index
         self._weighter = OptimalFactorWeighter(
             factor_loadings if factor_loadings is not None else pd.DataFrame(),
-            factor_returns
+            self.returns  # Use reset-index returns
         )
     
     def optimize_blend(
@@ -282,8 +300,17 @@ class SharpeOptimizer:
         # -----------------------------------------------
         # Create a temporary weighter trained ONLY on estimation data
         # This prevents "Double Dipping" / Hindsight Bias
+        # Handle case where loadings is None (pass empty DataFrame)
+        if self.loadings is not None:
+            loadings_for_weighter = self.loadings
+        else:
+            loadings_for_weighter = pd.DataFrame(
+                0.0, 
+                index=range(1), 
+                columns=estimation_data.columns
+            )
         est_weighter = OptimalFactorWeighter(
-            self.loadings, # Loadings assumed static/current for now
+            loadings_for_weighter,
             estimation_data
         )
         
@@ -522,9 +549,15 @@ class SharpeOptimizer:
         optimal_factor_weights = pd.Series(0.0, index=self.factor_names)
         for i, w_series in enumerate(precalculated_weights):
             optimal_factor_weights += optimal_method_weights[i] * w_series.reindex(self.factor_names).fillna(0)
+        
+        # Enforce non-negative weights (long-only constraint)
+        optimal_factor_weights = optimal_factor_weights.clip(lower=0)
             
         if optimal_factor_weights.sum() > 0:
             optimal_factor_weights = optimal_factor_weights / optimal_factor_weights.sum()
+        else:
+            # Fallback to equal weights if all weights are zero
+            optimal_factor_weights = pd.Series(1.0 / len(self.factor_names), index=self.factor_names)
         
         optimal_factor_weights_dict = optimal_factor_weights.to_dict()
         

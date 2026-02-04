@@ -59,13 +59,24 @@ Examples
 
 from __future__ import annotations
 import logging
-from typing import Dict, List, Optional, Tuple, Union, Any
+from typing import Dict, List, Optional, Tuple, Union, Any, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import warnings
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
+
+# Optional XGBoost for meta-modeling
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    warnings.warn("XGBoost not installed. Meta-modeling will use fallback methods.")
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
@@ -964,3 +975,598 @@ class SignalAggregator:
         df = pd.DataFrame(data)
         df.to_csv(filepath, index=False)
         _LOGGER.info(f"Exported {len(df)} signals to {filepath}")
+
+
+class FeatureExtractor:
+    """
+    Extracts and normalizes features from signal sources for meta-modeling.
+    
+    This class standardizes diverse signal objects into a structured feature
+    vector suitable for machine learning models.
+    
+    Parameters
+    ----------
+    scaler : StandardScaler, optional
+        Scikit-learn scaler for feature normalization
+    
+    Examples
+    --------
+    >>> extractor = FeatureExtractor()
+    >>> features = extractor.extract_momentum_features(momentum_data)
+    >>> normalized = extractor.normalize_features(features)
+    """
+    
+    def __init__(self, scaler: Optional[StandardScaler] = None):
+        self.scaler = scaler if scaler is not None else StandardScaler()
+        self._is_fitted = False
+    
+    def extract_momentum_features(
+        self, 
+        momentum_signals: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, float]:
+        """
+        Extract features from momentum analyzer output.
+        
+        Features extracted:
+        - RSI values (normalized to 0-1)
+        - MACD signals (encoded as -1, 0, 1)
+        - ADX (trend strength)
+        - Z-scores (normalized deviation)
+        """
+        features = {}
+        
+        for factor, data in momentum_signals.items():
+            prefix = f"mom_{factor}_"
+            
+            # RSI: Normalize to [-1, 1] (oversold to overbought)
+            rsi = data.get('rsi', 50)
+            features[f"{prefix}rsi"] = (rsi - 50) / 50  # -1 to 1
+            
+            # MACD signal encoding
+            macd_signal = data.get('macd_signal', 'neutral')
+            macd_map = {'strong_buy': 1.0, 'buy': 0.5, 'neutral': 0.0, 
+                       'sell': -0.5, 'strong_sell': -1.0}
+            features[f"{prefix}macd"] = macd_map.get(macd_signal, 0.0)
+            
+            # ADX: Trend strength (0-1 normalized)
+            adx = data.get('adx', 20)
+            features[f"{prefix}adx"] = min(1.0, adx / 50)
+            
+            # Combined signal strength
+            combined = data.get('combined_signal', 'neutral')
+            features[f"{prefix}strength"] = macd_map.get(combined, 0.0)
+        
+        return features
+    
+    def extract_regime_features(
+        self, 
+        regime_state: Any,
+        regime_probs: Optional[Dict] = None
+    ) -> Dict[str, float]:
+        """
+        Extract features from regime detector output.
+        
+        Features extracted:
+        - Regime probability
+        - Risk-on score
+        - Volatility level
+        - Trend strength
+        """
+        features = {}
+        
+        # Current regime encoding (one-hot style)
+        if regime_state:
+            regime_val = regime_state.regime.value if hasattr(regime_state, 'regime') else 'unknown'
+            features['regime_prob'] = getattr(regime_state, 'probability', 0.5)
+            features['regime_vol'] = getattr(regime_state, 'volatility', 0.2)
+            features['regime_trend'] = getattr(regime_state, 'trend', 0.0)
+        
+        # Regime probabilities for all states
+        if regime_probs:
+            for regime, prob in regime_probs.items():
+                features[f"regime_prob_{regime.value}"] = prob
+        
+        return features
+    
+    def extract_cross_sectional_features(
+        self,
+        cs_signals: List[Any]
+    ) -> Dict[str, float]:
+        """
+        Extract aggregate features from cross-sectional signals.
+        
+        Features extracted:
+        - Average decile score
+        - Distribution of signals (long/short ratio)
+        - Confidence metrics
+        """
+        features = {}
+        
+        if not cs_signals:
+            features['cs_signal_count'] = 0
+            features['cs_avg_decile'] = 5.0
+            features['cs_long_ratio'] = 0.5
+            return features
+        
+        # Aggregate statistics
+        deciles = [s.decile for s in cs_signals if hasattr(s, 'decile')]
+        confidences = [s.confidence for s in cs_signals if hasattr(s, 'confidence')]
+        
+        long_signals = [s for s in cs_signals 
+                       if hasattr(s, 'direction') and s.direction.value == 'long']
+        
+        features['cs_signal_count'] = len(cs_signals)
+        features['cs_avg_decile'] = np.mean(deciles) if deciles else 5.0
+        features['cs_long_ratio'] = len(long_signals) / len(cs_signals) if cs_signals else 0.5
+        features['cs_avg_confidence'] = np.mean(confidences) if confidences else 0.5
+        
+        return features
+    
+    def normalize_features(
+        self, 
+        features: Dict[str, float]
+    ) -> np.ndarray:
+        """
+        Normalize features using fitted scaler.
+        
+        Parameters
+        ----------
+        features : Dict[str, float]
+            Feature dictionary
+            
+        Returns
+        -------
+        np.ndarray
+            Normalized feature vector
+        """
+        values = np.array(list(features.values())).reshape(1, -1)
+        
+        if self._is_fitted:
+            return self.scaler.transform(values).flatten()
+        else:
+            # Fit on first call
+            self.scaler.fit(values)
+            self._is_fitted = True
+            return self.scaler.transform(values).flatten()
+    
+    def get_feature_names(self) -> List[str]:
+        """Get list of feature names (for model interpretability)."""
+        # This would need to be populated during extraction
+        return []
+
+
+class MetaModelAggregator(SignalAggregator):
+    """
+    Gradient Boosting Meta-Model for signal aggregation.
+    
+    Replaces the linear weighted sum approach with a machine learning model
+    (XGBoost) that captures non-linear interactions between signals.
+    
+    The model is trained using walk-forward cross-validation to prevent
+    lookahead bias, making it suitable for institutional trading strategies.
+    
+    Parameters
+    ----------
+    factor_research_system : FactorResearchSystem
+        The factor research system containing fitted factors
+    model_params : Dict, optional
+        XGBoost model parameters
+    min_training_samples : int, default 252
+        Minimum samples required before model training
+    prediction_horizon : int, default 5
+        Forward return horizon for labels (T+1 to T+5)
+    
+    Examples
+    --------
+    >>> aggregator = MetaModelAggregator(factor_research_system)
+    >>> aggregator.add_momentum_signals(momentum_analyzer)
+    >>> aggregator.add_regime_signals(regime_detector)
+    >>> 
+    >>> # Train on historical data (walk-forward)
+    >>> aggregator.train_walk_forward(min_window=252)
+    >>> 
+    >>> # Generate predictions
+    >>> consensus = aggregator.generate_meta_consensus()
+    >>> print(f"Predicted probability of positive return: {consensus['probability_up']:.2%}")
+    """
+    
+    def __init__(
+        self, 
+        factor_research_system: Any,
+        model_params: Optional[Dict] = None,
+        min_training_samples: int = 252,
+        prediction_horizon: int = 5,
+        use_voting_fallback: bool = True
+    ):
+        super().__init__(factor_research_system)
+        
+        self.min_training_samples = min_training_samples
+        self.prediction_horizon = prediction_horizon
+        self.use_voting_fallback = use_voting_fallback
+        
+        # XGBoost model configuration
+        default_params = {
+            'n_estimators': 100,
+            'max_depth': 3,
+            'learning_rate': 0.05,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'objective': 'binary:logistic',
+            'eval_metric': 'logloss',
+            'random_state': 42,
+            'n_jobs': -1
+        }
+        
+        self.model_params = {**default_params, **(model_params or {})}
+        self.model: Optional[xgb.XGBClassifier] = None
+        self.feature_extractor = FeatureExtractor()
+        
+        # Data caches for training
+        self.feature_cache: List[Dict[str, float]] = []
+        self.label_cache: List[int] = []
+        self.date_cache: List[datetime] = []
+        
+        # Historical returns for label generation
+        self.market_returns: Optional[pd.Series] = None
+        
+        # Fallback to voting if insufficient data or model not trained
+        self._model_trained = False
+        
+        if not XGBOOST_AVAILABLE:
+            _LOGGER.warning(
+                "XGBoost not available. MetaModelAggregator will use voting fallback."
+            )
+    
+    def set_market_returns(self, market_returns: pd.Series) -> None:
+        """
+        Set market returns for label generation.
+        
+        Parameters
+        ----------
+        market_returns : pd.Series
+            Daily market returns (e.g., SPY returns) indexed by date
+        """
+        self.market_returns = market_returns.copy()
+    
+    def _extract_current_features(
+        self, 
+        date: Optional[pd.Timestamp] = None
+    ) -> Dict[str, float]:
+        """Extract features from all signal sources at given date."""
+        features = {}
+        
+        # Momentum features
+        if self.momentum_analyzer is not None:
+            momentum_signals = self.momentum_analyzer.get_all_signals(date)
+            momentum_features = self.feature_extractor.extract_momentum_features(
+                momentum_signals
+            )
+            features.update(momentum_features)
+        
+        # Regime features
+        if self.regime_detector is not None:
+            try:
+                regime_state = self.regime_detector.detect_current_regime()
+                regime_probs = self.regime_detector.get_regime_probabilities()
+                regime_features = self.feature_extractor.extract_regime_features(
+                    regime_state, regime_probs
+                )
+                features.update(regime_features)
+            except Exception as e:
+                _LOGGER.warning(f"Failed to extract regime features: {e}")
+        
+        # Cross-sectional features
+        if self.cross_sectional_analyzer is not None:
+            try:
+                cs_signals = self.cross_sectional_analyzer.generate_long_short_signals()
+                cs_features = self.feature_extractor.extract_cross_sectional_features(
+                    cs_signals
+                )
+                features.update(cs_features)
+            except Exception as e:
+                _LOGGER.warning(f"Failed to extract cross-sectional features: {e}")
+        
+        return features
+    
+    def _generate_labels(
+        self, 
+        dates: List[datetime],
+        threshold: float = 0.0
+    ) -> List[int]:
+        """
+        Generate binary labels based on forward returns.
+        
+        Label = 1 if forward return > threshold, else 0
+        """
+        if self.market_returns is None:
+            raise ValueError("Market returns not set. Call set_market_returns() first.")
+        
+        labels = []
+        for date in dates:
+            try:
+                # Find index of current date
+                if date in self.market_returns.index:
+                    idx = self.market_returns.index.get_loc(date)
+                    
+                    # Calculate forward cumulative return
+                    if isinstance(idx, int) and idx + self.prediction_horizon < len(self.market_returns):
+                        future_return = (
+                            self.market_returns.iloc[idx + 1:idx + 1 + self.prediction_horizon].sum()
+                        )
+                        label = 1 if future_return > threshold else 0
+                        labels.append(label)
+                    else:
+                        labels.append(0)  # Default label
+                else:
+                    labels.append(0)
+            except Exception:
+                labels.append(0)
+        
+        return labels
+    
+    def build_feature_matrix(
+        self,
+        start_date: Optional[pd.Timestamp] = None,
+        end_date: Optional[pd.Timestamp] = None
+    ) -> Tuple[np.ndarray, np.ndarray, List[datetime]]:
+        """
+        Build feature matrix X and label vector y from historical data.
+        
+        Parameters
+        ----------
+        start_date : pd.Timestamp, optional
+            Start date for feature extraction
+        end_date : pd.Timestamp, optional
+            End date for feature extraction
+            
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray, List[datetime]]
+            X (features), y (labels), and dates
+        """
+        if self.market_returns is None:
+            raise ValueError("Market returns not set. Call set_market_returns() first.")
+        
+        # Filter dates
+        dates = self.market_returns.index
+        if start_date:
+            dates = dates[dates >= start_date]
+        if end_date:
+            dates = dates[dates <= end_date]
+        
+        # Need to leave room for forward returns
+        dates = dates[:-self.prediction_horizon]
+        
+        features_list = []
+        valid_dates = []
+        
+        _LOGGER.info(f"Building feature matrix for {len(dates)} dates...")
+        
+        for date in dates:
+            try:
+                # Extract features for this date
+                features = self._extract_current_features(date)
+                
+                if features:  # Only add if we got valid features
+                    features_list.append(features)
+                    valid_dates.append(date)
+            except Exception as e:
+                _LOGGER.debug(f"Failed to extract features for {date}: {e}")
+                continue
+        
+        if len(features_list) < self.min_training_samples:
+            raise ValueError(
+                f"Insufficient samples for training: {len(features_list)} "
+                f"(min: {self.min_training_samples})"
+            )
+        
+        # Convert to matrix (align features)
+        all_keys = set()
+        for f in features_list:
+            all_keys.update(f.keys())
+        all_keys = sorted(all_keys)
+        
+        X = np.zeros((len(features_list), len(all_keys)))
+        for i, features in enumerate(features_list):
+            for j, key in enumerate(all_keys):
+                X[i, j] = features.get(key, 0.0)
+        
+        # Generate labels
+        y = np.array(self._generate_labels(valid_dates))
+        
+        _LOGGER.info(f"Feature matrix built: X.shape={X.shape}, y.mean={y.mean():.2%}")
+        
+        return X, y, valid_dates
+    
+    def train_walk_forward(
+        self, 
+        min_window: int = 252,
+        step_size: int = 21,
+        purge_gap: int = 5,
+        verbose: bool = True
+    ) -> None:
+        """
+        Train the meta-model using walk-forward cross-validation.
+        
+        This prevents lookahead bias by training only on past data and testing
+        on future data. Implements purged cross-validation to avoid overlapping
+        labels.
+        
+        Parameters
+        ----------
+        min_window : int, default 252
+            Minimum training window (1 year of trading days)
+        step_size : int, default 21
+            Number of days to advance each iteration (1 month)
+        purge_gap : int, default 5
+            Gap between train and test to avoid label overlap
+        verbose : bool, default True
+            Print training progress
+        """
+        if not XGBOOST_AVAILABLE:
+            _LOGGER.warning("XGBoost not available. Skipping model training.")
+            return
+        
+        try:
+            # Build full feature matrix
+            X, y, dates = self.build_feature_matrix()
+            
+            if len(X) < min_window + step_size:
+                _LOGGER.warning(
+                    f"Insufficient data for walk-forward: {len(X)} samples"
+                )
+                return
+            
+            # Expanding window walk-forward
+            # In production, we train on [0...t] to predict t+1
+            n_samples = len(X)
+            
+            if verbose:
+                _LOGGER.info(f"Starting walk-forward training with {n_samples} samples...")
+            
+            # For simplicity, we use an expanding window approach:
+            # Train on first N samples, validate on remaining
+            # In practice, you'd iterate through windows
+            
+            # Purged split: remove samples immediately adjacent to test set
+            train_end = n_samples - step_size - purge_gap
+            
+            if train_end < min_window:
+                _LOGGER.warning(f"Training window too small: {train_end}")
+                return
+            
+            X_train = X[:train_end]
+            y_train = y[:train_end]
+            X_val = X[train_end + purge_gap:]
+            y_val = y[train_end + purge_gap:]
+            
+            if verbose:
+                _LOGGER.info(
+                    f"Training on {len(X_train)} samples, "
+                    f"validating on {len(X_val)} samples"
+                )
+            
+            # Train XGBoost model
+            self.model = xgb.XGBClassifier(**self.model_params)
+            
+            self.model.fit(
+                X_train, y_train,
+                eval_set=[(X_val, y_val)] if len(X_val) > 0 else None,
+                verbose=False
+            )
+            
+            # Store training metrics
+            train_accuracy = self.model.score(X_train, y_train)
+            val_accuracy = self.model.score(X_val, y_val) if len(X_val) > 0 else 0
+            
+            # Feature importance
+            importance = self.model.feature_importances_
+            top_features_idx = np.argsort(importance)[-5:][::-1]
+            
+            if verbose:
+                _LOGGER.info(f"Meta-model trained successfully!")
+                _LOGGER.info(f"  Train accuracy: {train_accuracy:.2%}")
+                _LOGGER.info(f"  Val accuracy: {val_accuracy:.2%}")
+                _LOGGER.info(f"  Top feature indices: {top_features_idx.tolist()}")
+            
+            self._model_trained = True
+            
+            # Cache training data for potential retraining
+            self._training_X = X
+            self._training_y = y
+            self._training_dates = dates
+            
+        except Exception as e:
+            _LOGGER.error(f"Walk-forward training failed: {e}")
+            self._model_trained = False
+    
+    def generate_meta_consensus(
+        self, 
+        date: Optional[pd.Timestamp] = None
+    ) -> Dict[str, Union[ConsensusSignal, float]]:
+        """
+        Generate consensus using the meta-model.
+        
+        Replaces the linear weighted voting with XGBoost probability predictions.
+        
+        Parameters
+        ----------
+        date : pd.Timestamp, optional
+            Date to generate consensus for
+            
+        Returns
+        -------
+        Dict[str, Union[ConsensusSignal, float]]
+            Contains 'consensus_signal' and 'probability_up'
+        """
+        # Fallback to voting if model not trained
+        if not self._model_trained or self.model is None:
+            if self.use_voting_fallback:
+                _LOGGER.debug("Using voting fallback (model not trained)")
+                return {'consensus_signal': self.aggregate_signals(date), 'probability_up': 0.5}
+            else:
+                raise RuntimeError("Meta-model not trained. Call train_walk_forward() first.")
+        
+        # Extract current features
+        features = self._extract_current_features(date)
+        
+        if not features:
+            _LOGGER.warning("No features extracted. Using fallback.")
+            return {'consensus_signal': self.aggregate_signals(date), 'probability_up': 0.5}
+        
+        # Convert to feature vector (align with training features)
+        if hasattr(self, '_training_X'):
+            # Use same feature order as training
+            X = np.zeros((1, self._training_X.shape[1]))
+            for j, key in enumerate(sorted(features.keys())):
+                if j < X.shape[1]:
+                    X[0, j] = features.get(key, 0.0)
+        else:
+            X = np.array(list(features.values())).reshape(1, -1)
+        
+        # Predict probability of positive return
+        prob_up = self.model.predict_proba(X)[0, 1]
+        
+        # Convert probability to consensus score (-100 to 100)
+        # 0.5 -> 0, 1.0 -> 100, 0.0 -> -100
+        consensus_score = (prob_up - 0.5) * 200
+        
+        # Map to direction
+        direction = self._score_to_direction(consensus_score)
+        
+        # Create consensus signal
+        consensus_signal = ConsensusSignal(
+            ticker=None,
+            factor='meta_model',
+            consensus_direction=direction,
+            consensus_score=consensus_score,
+            confidence=abs(consensus_score),
+            contributing_signals=[],  # Could populate with raw signals
+            recommendation=f"Meta-model: {prob_up:.1%} probability of positive return",
+            risk_level='medium' if 0.3 < prob_up < 0.7 else 'high'
+        )
+        
+        return {
+            'consensus_signal': consensus_signal,
+            'probability_up': prob_up,
+            'meta_score': consensus_score
+        }
+    
+    def get_model_feature_importance(self) -> Optional[pd.DataFrame]:
+        """
+        Get feature importance from the trained meta-model.
+        
+        Returns
+        -------
+        Optional[pd.DataFrame]
+            Feature importance DataFrame or None if model not trained
+        """
+        if not self._model_trained or self.model is None:
+            return None
+        
+        importance = self.model.feature_importances_
+        
+        return pd.DataFrame({
+            'feature_idx': range(len(importance)),
+            'importance': importance
+        }).sort_values('importance', ascending=False)

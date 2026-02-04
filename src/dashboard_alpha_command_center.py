@@ -52,10 +52,20 @@ try:
     from src.database import check_database_health, get_db_connection
     from src.config import config
     from src.factor_labeler import batch_name_factors, FactorName
+    # Phase 2 imports
+    from src.signal_aggregator import MetaModelAggregator, FeatureExtractor
+    XGBOOST_AVAILABLE = True
 except ImportError as e:
     st.error(f"Failed to import system modules: {e}")
     st.info("Make sure you're running from the project root directory")
     raise
+
+# Check for optional XGBoost
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
 
 # =============================================================================
 # PAGE CONFIGURATION - Terminal Style
@@ -2041,7 +2051,577 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
 
 
 # =============================================================================
-# SECTION 4: RISK & DRAWDOWN
+# SECTION 4: PHASE 2 - REGIME CONDITIONAL OPTIMIZATION (RS-MVO)
+# =============================================================================
+
+def render_regime_conditional_optimization(data: dict, analyzers: dict):
+    """Render the Phase 2 Regime-Switching Mean-Variance Optimization panel."""
+    st.markdown("<h2>🎯 REGIME CONDITIONAL OPTIMIZATION (RS-MVO)</h2>", 
+               unsafe_allow_html=True)
+    st.caption("Data-driven factor weights conditional on market regime | Phase 2 Enhancement")
+    
+    returns = data.get('returns')
+    regime_detector = analyzers.get('regime')
+    
+    if returns is None:
+        st.error("❌ Factor returns data not available")
+        return
+    
+    if regime_detector is None or regime_detector.hmm_model is None:
+        st.error("❌ Regime detector not initialized. Fit HMM first.")
+        return
+    
+    # Current regime display
+    current_regime = regime_detector.detect_current_regime()
+    regime_probs = regime_detector.get_regime_probabilities()
+    
+    st.markdown("### 📊 Current Market Regime")
+    
+    col1, col2, col3 = st.columns([1, 1, 1.5])
+    
+    with col1:
+        # Regime gauge
+        fig_gauge = create_regime_gauge_chart(regime_detector)
+        st.plotly_chart(fig_gauge, use_container_width=True, key="rsmvo_regime_gauge")
+    
+    with col2:
+        st.markdown("**Regime Characteristics**")
+        st.metric("Volatility", f"{current_regime.volatility:.2%}")
+        st.metric("Trend", f"{current_regime.trend:.4f}")
+        st.write(f"**Description:** {current_regime.description}")
+    
+    with col3:
+        # Regime probability bars
+        prob_df = pd.DataFrame({
+            'Regime': [r.value.replace('_', ' ').title() for r in regime_probs.keys()],
+            'Probability': list(regime_probs.values())
+        }).sort_values('Probability', ascending=True)
+        
+        fig_probs = go.Figure()
+        colors = ['#00ff88' if p > 0.5 else '#ffa500' if p > 0.2 else '#ff6666' 
+                  for p in prob_df['Probability']]
+        
+        fig_probs.add_trace(go.Bar(
+            x=prob_df['Probability'],
+            y=prob_df['Regime'],
+            orientation='h',
+            marker_color=colors,
+            text=[f"{p:.1%}" for p in prob_df['Probability']],
+            textposition='inside'
+        ))
+        
+        fig_probs.update_layout(
+            height=250,
+            xaxis_title="Probability",
+            title="Regime Probability Distribution",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="white", family="Courier New")
+        )
+        st.plotly_chart(fig_probs, use_container_width=True, key="rsmvo_regime_probs")
+    
+    st.markdown("---")
+    
+    # RS-MVO Configuration
+    st.markdown("### ⚙️ RS-MVO Configuration")
+    
+    config_col1, config_col2, config_col3 = st.columns(3)
+    
+    with config_col1:
+        lookback_window = st.slider(
+            "Lookback Window (days)",
+            min_value=252,
+            max_value=5040,
+            value=2520,
+            step=252,
+            help="Historical period to consider for regime filtering (~10 years = 2520 days)"
+        )
+    
+    with config_col2:
+        min_observations = st.slider(
+            "Min Regime Observations",
+            min_value=10,
+            max_value=200,
+            value=50,
+            step=10,
+            help="Minimum number of regime-specific observations required"
+        )
+    
+    with config_col3:
+        target_regime = st.selectbox(
+            "Target Regime",
+            options=list(MarketRegime),
+            format_func=lambda r: r.value.replace('_', ' ').title(),
+            index=list(MarketRegime).index(current_regime.regime)
+        )
+        fallback_to_global = st.checkbox("Fallback to Global", value=True,
+                                         help="Use global optimization if insufficient regime data")
+    
+    st.markdown("---")
+    
+    # Run Conditional Optimization
+    if st.button("🚀 Run RS-MVO Optimization", type="primary"):
+        with st.spinner(f"Running Regime-Switching MVO for {target_regime.value}..."):
+            try:
+                # Get conditional weights
+                weights = regime_detector.get_conditional_optimal_weights(
+                    regime=target_regime,
+                    lookback_window=lookback_window,
+                    min_observations=min_observations,
+                    fallback_to_global=fallback_to_global
+                )
+                
+                # Get heuristic weights for comparison
+                heuristic_weights = regime_detector._get_heuristic_factor_weights(target_regime)
+                
+                # Store in session state
+                st.session_state['rsmvo_weights'] = weights
+                st.session_state['rsmvo_heuristic'] = heuristic_weights
+                st.session_state['rsmvo_regime'] = target_regime
+                
+                st.success(f"✓ RS-MVO complete for {target_regime.value}!")
+                
+            except Exception as e:
+                st.error(f"RS-MVO failed: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+    
+    # Display results if available
+    if 'rsmvo_weights' in st.session_state:
+        weights = st.session_state['rsmvo_weights']
+        heuristic = st.session_state['rsmvo_heuristic']
+        target = st.session_state['rsmvo_regime']
+        
+        st.markdown("### 📈 Optimization Results")
+        
+        res_col1, res_col2 = st.columns(2)
+        
+        with res_col1:
+            st.markdown("**🎯 RS-MVO Weights (Data-Driven)**")
+            
+            # Create comparison dataframe
+            comp_df = pd.DataFrame({
+                'Factor': list(weights.keys()),
+                'RS-MVO Weight': list(weights.values()),
+                'Heuristic Weight': [heuristic.get(f, 0) for f in weights.keys()]
+            })
+            comp_df['Difference'] = comp_df['RS-MVO Weight'] - comp_df['Heuristic Weight']
+            
+            # Sort by weight
+            comp_df = comp_df.sort_values('RS-MVO Weight', ascending=True)
+            
+            # Bar chart
+            fig_weights = go.Figure()
+            
+            fig_weights.add_trace(go.Bar(
+                y=comp_df['Factor'],
+                x=comp_df['RS-MVO Weight'],
+                orientation='h',
+                name='RS-MVO (Data-Driven)',
+                marker_color='#00d4ff',
+                text=[f"{w:.1%}" for w in comp_df['RS-MVO Weight']],
+                textposition='inside'
+            ))
+            
+            fig_weights.add_trace(go.Bar(
+                y=comp_df['Factor'],
+                x=comp_df['Heuristic Weight'],
+                orientation='h',
+                name='Heuristic (Rules-Based)',
+                marker_color='#ff6666',
+                opacity=0.7,
+                text=[f"{w:.1%}" for w in comp_df['Heuristic Weight']],
+                textposition='inside'
+            ))
+            
+            fig_weights.update_layout(
+                height=350,
+                barmode='group',
+                title="Factor Weights Comparison",
+                xaxis_title="Weight",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white", family="Courier New"),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.3)
+            )
+            
+            st.plotly_chart(fig_weights, use_container_width=True, key="rsmvo_weights_comp")
+        
+        with res_col2:
+            st.markdown("**📊 Weight Differences (RS-MVO vs Heuristic)**")
+            
+            # Difference chart
+            diff_df = comp_df.sort_values('Difference', ascending=True)
+            colors = ['#00ff88' if d > 0 else '#ff6666' for d in diff_df['Difference']]
+            
+            fig_diff = go.Figure()
+            fig_diff.add_trace(go.Bar(
+                y=diff_df['Factor'],
+                x=diff_df['Difference'],
+                orientation='h',
+                marker_color=colors,
+                text=[f"{d:+.1%}" for d in diff_df['Difference']],
+                textposition='outside'
+            ))
+            
+            fig_diff.add_vline(x=0, line_dash="dash", line_color="white")
+            
+            fig_diff.update_layout(
+                height=350,
+                title="Weight Differences (Positive = More Weight in RS-MVO)",
+                xaxis_title="Weight Difference",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white", family="Courier New")
+            )
+            
+            st.plotly_chart(fig_diff, use_container_width=True, key="rsmvo_diff")
+        
+        # Key insights
+        st.markdown("### 💡 Key Insights")
+        
+        # Find largest deviations
+        top_increases = comp_df.nlargest(3, 'Difference')
+        top_decreases = comp_df.nsmallest(3, 'Difference')
+        
+        insight_col1, insight_col2 = st.columns(2)
+        
+        with insight_col1:
+            st.markdown("**📈 Factors RS-MVO Overweights vs Heuristic:**")
+            for _, row in top_increases.iterrows():
+                if row['Difference'] > 0.01:
+                    st.markdown(f"- **{row['Factor']}**: +{row['Difference']:.1%} "
+                              f"({row['Heuristic Weight']:.1%} → {row['RS-MVO Weight']:.1%})")
+        
+        with insight_col2:
+            st.markdown("**📉 Factors RS-MVO Underweights vs Heuristic:**")
+            for _, row in top_decreases.iterrows():
+                if row['Difference'] < -0.01:
+                    st.markdown(f"- **{row['Factor']}**: {row['Difference']:.1%} "
+                              f"({row['Heuristic Weight']:.1%} → {row['RS-MVO Weight']:.1%})")
+        
+        # Export option
+        csv = comp_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download RS-MVO Weights",
+            data=csv,
+            file_name=f"rsmvo_weights_{target.value}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+
+
+# =============================================================================
+# SECTION 5: PHASE 2 - META-MODEL SIGNAL AGGREGATION
+# =============================================================================
+
+def render_meta_model_aggregation(data: dict, analyzers: dict):
+    """Render the Phase 2 XGBoost Meta-Model Signal Aggregation panel."""
+    st.markdown("<h2>🤖 META-MODEL SIGNAL AGGREGATION</h2>", 
+               unsafe_allow_html=True)
+    st.caption("Gradient Boosting consensus with non-linear signal interactions | Phase 2 Enhancement")
+    
+    returns = data.get('returns')
+    loadings = data.get('loadings')
+    regime_detector = analyzers.get('regime')
+    momentum_analyzer = analyzers.get('momentum')
+    
+    if returns is None:
+        st.error("❌ Factor returns data not available")
+        return
+    
+    # Check XGBoost availability
+    if not XGBOOST_AVAILABLE:
+        st.warning("⚠️ XGBoost not installed. Meta-model will use voting fallback.")
+        st.info("Install with: `pip install xgboost` for full functionality")
+    
+    st.markdown("### 📊 Meta-Model Configuration")
+    
+    config_col1, config_col2, config_col3 = st.columns(3)
+    
+    with config_col1:
+        min_training_samples = st.slider(
+            "Min Training Samples",
+            min_value=63,
+            max_value=504,
+            value=252,
+            step=63,
+            help="Minimum historical samples required for model training (~1 year = 252)"
+        )
+    
+    with config_col2:
+        prediction_horizon = st.slider(
+            "Prediction Horizon (days)",
+            min_value=1,
+            max_value=21,
+            value=5,
+            step=1,
+            help="Forward return horizon for label generation"
+        )
+    
+    with config_col3:
+        model_type = st.selectbox(
+            "Model Type",
+            options=["XGBoost (Classifier)", "Voting Fallback"],
+            index=0 if XGBOOST_AVAILABLE else 1,
+            disabled=not XGBOOST_AVAILABLE
+        )
+        use_voting_fallback = st.checkbox("Allow Voting Fallback", value=True,
+                                          help="Use voting if model untrained")
+    
+    # Advanced options
+    with st.expander("🔧 Advanced Model Parameters"):
+        adv_col1, adv_col2, adv_col3 = st.columns(3)
+        
+        with adv_col1:
+            n_estimators = st.slider("N Estimators", 50, 500, 100, 50)
+            max_depth = st.slider("Max Depth", 2, 10, 3, 1)
+        
+        with adv_col2:
+            learning_rate = st.slider("Learning Rate", 0.01, 0.3, 0.05, 0.01)
+            subsample = st.slider("Subsample", 0.5, 1.0, 0.8, 0.1)
+        
+        with adv_col3:
+            purge_gap = st.slider("Purge Gap (days)", 0, 10, 5, 1,
+                                  help="Gap between train/test to avoid label overlap")
+    
+    st.markdown("---")
+    
+    # Feature extraction preview
+    st.markdown("### 🔍 Feature Extraction Preview")
+    st.caption("Features extracted from signal sources for meta-model input")
+    
+    # Create a sample feature extraction
+    try:
+        extractor = FeatureExtractor()
+        
+        # Sample momentum features
+        sample_momentum = {
+            'momentum': {'rsi': 65, 'macd_signal': 'buy', 'adx': 25, 'combined_signal': 'buy'},
+            'value': {'rsi': 45, 'macd_signal': 'neutral', 'adx': 15, 'combined_signal': 'neutral'}
+        }
+        mom_features = extractor.extract_momentum_features(sample_momentum)
+        
+        # Sample regime features
+        if regime_detector and regime_detector.hmm_model:
+            current = regime_detector.detect_current_regime()
+            regime_probs = regime_detector.get_regime_probabilities()
+            regime_features = extractor.extract_regime_features(current, regime_probs)
+        else:
+            regime_features = {'regime_prob': 0.5, 'regime_vol': 0.2}
+        
+        feat_col1, feat_col2 = st.columns(2)
+        
+        with feat_col1:
+            st.markdown("**Momentum Features (Sample)**")
+            mom_df = pd.DataFrame(list(mom_features.items()), columns=['Feature', 'Value'])
+            st.dataframe(mom_df.head(10), use_container_width=True, height=200)
+        
+        with feat_col2:
+            st.markdown("**Regime Features (Sample)**")
+            reg_df = pd.DataFrame(list(regime_features.items()), columns=['Feature', 'Value'])
+            st.dataframe(reg_df, use_container_width=True, height=200)
+        
+    except Exception as e:
+        st.warning(f"Could not generate feature preview: {e}")
+    
+    st.markdown("---")
+    
+    # Model Training
+    st.markdown("### 🏋️ Model Training")
+    
+    train_col1, train_col2 = st.columns([1, 2])
+    
+    with train_col1:
+        # Need market returns for training
+        st.markdown("**Market Returns (for Labels)**")
+        use_proxy_market = st.checkbox("Use Factor Mean as Market Proxy", value=True)
+        
+        if use_proxy_market:
+            market_proxy = returns.mean(axis=1)
+            st.success(f"✓ Using factor mean as market proxy ({len(market_proxy)} days)")
+        else:
+            uploaded_market = st.file_uploader("Upload Market Returns CSV", type=['csv'])
+            if uploaded_market:
+                market_proxy = pd.read_csv(uploaded_market, index_col=0, parse_dates=True).squeeze()
+            else:
+                market_proxy = None
+                st.warning("⚠️ No market returns provided")
+    
+    with train_col2:
+        if st.button("🚀 Train Meta-Model (Walk-Forward)", type="primary", use_container_width=True):
+            if market_proxy is None:
+                st.error("❌ Market returns required for training")
+            else:
+                with st.spinner("Training XGBoost meta-model with walk-forward validation..."):
+                    try:
+                        # Initialize meta-model aggregator
+                        class MockFRS:
+                            pass
+                        
+                        model_params = {
+                            'n_estimators': n_estimators,
+                            'max_depth': max_depth,
+                            'learning_rate': learning_rate,
+                            'subsample': subsample
+                        }
+                        
+                        aggregator = MetaModelAggregator(
+                            MockFRS(),
+                            model_params=model_params,
+                            min_training_samples=min_training_samples,
+                            prediction_horizon=prediction_horizon,
+                            use_voting_fallback=use_voting_fallback
+                        )
+                        
+                        aggregator.set_market_returns(market_proxy)
+                        
+                        # Add signal sources if available
+                        if momentum_analyzer:
+                            aggregator.add_momentum_signals(momentum_analyzer)
+                        if regime_detector:
+                            aggregator.add_regime_signals(regime_detector)
+                        
+                        # Train
+                        aggregator.train_walk_forward(
+                            min_window=min_training_samples,
+                            step_size=21,
+                            purge_gap=purge_gap,
+                            verbose=True
+                        )
+                        
+                        # Store in session state
+                        st.session_state['meta_model'] = aggregator
+                        st.session_state['model_trained'] = True
+                        
+                        st.success("✓ Meta-model training complete!")
+                        
+                        # Show feature importance if available
+                        importance_df = aggregator.get_model_feature_importance()
+                        if importance_df is not None:
+                            st.session_state['feature_importance'] = importance_df
+                        
+                    except Exception as e:
+                        st.error(f"Training failed: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+    
+    # Display training results
+    if 'model_trained' in st.session_state and st.session_state['model_trained']:
+        st.markdown("---")
+        st.markdown("### 📈 Model Performance & Predictions")
+        
+        aggregator = st.session_state['meta_model']
+        
+        perf_col1, perf_col2, perf_col3 = st.columns(3)
+        
+        with perf_col1:
+            st.metric("Model Status", "✓ Trained" if aggregator._model_trained else "Fallback")
+        
+        with perf_col2:
+            st.metric("Training Samples", len(aggregator._training_X) if hasattr(aggregator, '_training_X') else "N/A")
+        
+        with perf_col3:
+            st.metric("Features", aggregator._training_X.shape[1] if hasattr(aggregator, '_training_X') else "N/A")
+        
+        # Feature importance
+        if 'feature_importance' in st.session_state:
+            st.markdown("**🔍 Feature Importance (Top 10)**")
+            importance = st.session_state['feature_importance'].head(10)
+            
+            fig_imp = go.Figure()
+            fig_imp.add_trace(go.Bar(
+                x=importance['importance'],
+                y=[f"Feature {i}" for i in importance['feature_idx']],
+                orientation='h',
+                marker_color='#00d4ff'
+            ))
+            
+            fig_imp.update_layout(
+                height=300,
+                title="XGBoost Feature Importance",
+                xaxis_title="Importance",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white", family="Courier New")
+            )
+            
+            st.plotly_chart(fig_imp, use_container_width=True, key="feature_importance")
+        
+        # Generate current prediction
+        st.markdown("### 🎯 Current Consensus Prediction")
+        
+        if st.button("Generate Meta-Consensus Signal"):
+            try:
+                result = aggregator.generate_meta_consensus()
+                
+                prob_up = result['probability_up']
+                meta_score = result['meta_score']
+                consensus_signal = result['consensus_signal']
+                
+                pred_col1, pred_col2, pred_col3 = st.columns(3)
+                
+                with pred_col1:
+                    # Probability gauge
+                    fig_prob = go.Figure(go.Indicator(
+                        mode="gauge+number",
+                        value=prob_up * 100,
+                        number={'suffix': "%", 'font': {'size': 24}},
+                        title={'text': "P(Positive Return)", 'font': {'size': 14}},
+                        gauge={
+                            'axis': {'range': [0, 100]},
+                            'bar': {'color': "#00ff88" if prob_up > 0.5 else "#ff6666"},
+                            'steps': [
+                                {'range': [0, 50], 'color': "#3d1f1f"},
+                                {'range': [50, 100], 'color': "#1f3d1f"}
+                            ],
+                            'threshold': {
+                                'line': {'color': "white", 'width': 4},
+                                'thickness': 0.75,
+                                'value': 50
+                            }
+                        }
+                    ))
+                    
+                    fig_prob.update_layout(
+                        height=250,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="white")
+                    )
+                    
+                    st.plotly_chart(fig_prob, use_container_width=True, key="prob_gauge")
+                
+                with pred_col2:
+                    st.metric("Meta Score", f"{meta_score:.1f}", 
+                             delta="Bullish" if meta_score > 0 else "Bearish")
+                    st.metric("Signal Strength", f"{abs(meta_score):.1f}/100")
+                    st.write(f"**Direction:** {consensus_signal.consensus_direction.value}")
+                    st.write(f"**Confidence:** {consensus_signal.confidence:.1f}%")
+                
+                with pred_col3:
+                    st.markdown("**📋 Recommendation**")
+                    st.info(consensus_signal.recommendation)
+                    st.markdown(f"**Risk Level:** {consensus_signal.risk_level}")
+                
+                # Signal interpretation
+                if prob_up > 0.7:
+                    st.success("🟢 **STRONG BULLISH SIGNAL**: Model predicts high probability of positive returns. "
+                              "Consider increasing long exposure.")
+                elif prob_up > 0.55:
+                    st.info("🟡 **MODERATE BULLISH**: Slight positive bias detected.")
+                elif prob_up < 0.3:
+                    st.error("🔴 **STRONG BEARISH SIGNAL**: Model predicts high probability of negative returns. "
+                            "Consider defensive positioning or hedging.")
+                elif prob_up < 0.45:
+                    st.warning("🟠 **MODERATE BEARISH**: Slight negative bias detected.")
+                else:
+                    st.write("⚪ **NEUTRAL**: No clear directional signal. Maintain current positioning.")
+                
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
+
+
+# =============================================================================
+# SECTION 6: RISK & DRAWDOWN
 # =============================================================================
 
 def render_risk_drawdown(data: dict, analyzers: dict):
@@ -2244,6 +2824,15 @@ def render_sidebar(data: dict, analyzers: dict):
     with st.sidebar.expander("API Status"):
         st.write("Alpha Vantage: Connected")
         st.write("OpenAI (LLM): Available")
+    
+    # Phase 2 Status
+    st.sidebar.markdown("### 🚀 Phase 2 Features")
+    
+    with st.sidebar.expander("System Capabilities"):
+        st.write(f"✓ RS-MVO: {'Available' if analyzers.get('regime') else 'Needs Regime Detector'}")
+        st.write(f"✓ Meta-Model: {'XGBoost Ready' if XGBOOST_AVAILABLE else 'Voting Fallback'}")
+        st.write("✓ Conditional Optimization: Active")
+        st.write("✓ Walk-Forward Training: Active")
 
 
 # =============================================================================
@@ -2279,10 +2868,12 @@ def main():
     # Render main sections
     render_morning_coffee_header(data, analyzers)
     
-    # Main tabs
-    tab_discover, tab_construct, tab_risk = st.tabs([
+    # Main tabs (including Phase 2 enhancements)
+    tab_discover, tab_construct, tab_phase2_regime, tab_phase2_meta, tab_risk = st.tabs([
         "🔬 Factor Lab",
-        "🛠️ Portfolio Constructor", 
+        "🛠️ Portfolio Constructor",
+        "🎯 Regime RS-MVO",  # Phase 2
+        "🤖 Meta-Model",     # Phase 2
         "⚠️ Risk & Drawdown"
     ])
     
@@ -2292,13 +2883,20 @@ def main():
     with tab_construct:
         render_portfolio_constructor(data, analyzers)
     
+    with tab_phase2_regime:
+        render_regime_conditional_optimization(data, analyzers)
+    
+    with tab_phase2_meta:
+        render_meta_model_aggregation(data, analyzers)
+    
     with tab_risk:
         render_risk_drawdown(data, analyzers)
     
     # Footer
     st.markdown("---")
     st.caption(f"""
-    Alpha Command Center v2.0 | Factor Operations Terminal | 
+    Alpha Command Center v2.1 | Factor Operations Terminal | 
+    Phase 2: RS-MVO + XGBoost Meta-Model | 
     Session: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 
     Data as of: {data['returns'].index.max().strftime('%Y-%m-%d') if data['returns'] is not None else 'N/A'}
     """)

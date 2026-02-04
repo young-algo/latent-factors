@@ -71,6 +71,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+from sklearn.covariance import LedoitWolf
 
 # Optional hmmlearn import with fallback
 try:
@@ -79,6 +80,13 @@ try:
 except ImportError:
     HMM_AVAILABLE = False
     warnings.warn("hmmlearn not installed. Regime detection will use simplified methods.")
+
+# Optional import for factor optimization
+try:
+    from src.factor_optimization import SharpeOptimizer
+    OPTIMIZER_AVAILABLE = True
+except ImportError:
+    OPTIMIZER_AVAILABLE = False
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
@@ -226,10 +234,12 @@ class RegimeDetector:
         """
         self.factor_returns = factor_returns.copy()
         self.n_factors = factor_returns.shape[1]
+        self.factor_columns = list(factor_returns.columns)
         self.scaler = StandardScaler()
         self.hmm_model = None
         self.regime_labels: Dict[int, MarketRegime] = {}
         self.regime_history: Optional[pd.DataFrame] = None
+        self._regime_masks: Dict[MarketRegime, pd.Series] = {}  # Cache for regime masks
         self._validate_data()
 
     def _validate_data(self) -> None:
@@ -407,7 +417,7 @@ class RegimeDetector:
         X_scaled: np.ndarray,
         valid_mask: np.ndarray
     ) -> None:
-        """Generate historical regime classifications."""
+        """Generate historical regime classifications and cache regime masks."""
         if self.hmm_model is None:
             return
 
@@ -425,6 +435,9 @@ class RegimeDetector:
         # Add factor returns
         for col in self.factor_returns.columns:
             self.regime_history[col] = self.factor_returns.loc[dates, col].values
+        
+        # Cache regime masks for conditional optimization
+        self._cache_regime_masks()
 
     def detect_current_regime(self) -> RegimeState:
         """
@@ -513,20 +526,198 @@ class RegimeDetector:
 
         return regime_probs
 
+    def _cache_regime_masks(self) -> None:
+        """Cache boolean masks for each regime type for efficient filtering."""
+        if self.regime_history is None:
+            return
+        
+        self._regime_masks = {}
+        for regime in MarketRegime:
+            self._regime_masks[regime] = self.regime_history['regime'] == regime
+    
+    def get_conditional_optimal_weights(
+        self,
+        regime: MarketRegime,
+        lookback_window: int = 2520,
+        min_observations: int = 50,
+        fallback_to_global: bool = True
+    ) -> Dict[str, float]:
+        """
+        Calculates optimal weights CONDITIONAL on the specific regime state.
+        
+        Implements Regime-Switching Mean-Variance Optimization (RS-MVO).
+        Instead of optimizing over a rolling window (which blends regimes),
+        we filter the historical covariance matrix to include ONLY periods 
+        matching the current regime.
+
+        Parameters
+        ----------
+        regime : MarketRegime
+            Target regime for conditional optimization
+        lookback_window : int, default 2520
+            Lookback period (in days) to consider for historical filtering.
+            Default is ~10 years of trading days.
+        min_observations : int, default 50
+            Minimum number of regime observations required for optimization.
+            Falls back to global optimization if insufficient.
+        fallback_to_global : bool, default True
+            If True, falls back to global optimization when insufficient 
+            regime-specific data is available.
+
+        Returns
+        -------
+        Dict[str, float]
+            Optimal factor weights conditional on the regime
+
+        Examples
+        --------
+        >>> detector.fit_hmm(n_regimes=4)
+        >>> current_regime = detector.detect_current_regime()
+        >>> weights = detector.get_conditional_optimal_weights(
+        ...     current_regime.regime,
+        ...     lookback_window=2520
+        ... )
+        >>> print(f"Conditional optimal weights: {weights}")
+        """
+        if self.regime_history is None:
+            raise RuntimeError("HMM not fitted. Call fit_hmm() first.")
+        
+        if not OPTIMIZER_AVAILABLE:
+            _LOGGER.warning("SharpeOptimizer not available. Using heuristic weights.")
+            return self._get_heuristic_factor_weights(regime)
+
+        # 1. Filter History: Select only returns where State == Regime
+        # We look back 'lookback_window' days to ensure we use relevant market history
+        history_slice = self.regime_history.iloc[-lookback_window:].copy()
+        regime_mask = history_slice['regime'] == regime
+        
+        # 2. Extract Conditional Returns (The "Purged" Dataset)
+        # Only days that looked like *today* are included
+        factor_cols = [c for c in history_slice.columns 
+                      if c not in ['state', 'regime']]
+        conditional_returns = history_slice.loc[regime_mask, factor_cols].copy()
+        
+        if len(conditional_returns) < min_observations:
+            _LOGGER.warning(
+                f"Insufficient regime history for {regime.value}: "
+                f"{len(conditional_returns)} observations (min: {min_observations}). "
+                f"{'Falling back to global optimization.' if fallback_to_global else 'Using heuristic weights.'}"
+            )
+            if fallback_to_global:
+                return self._get_global_optimal_weights(lookback_window)
+            else:
+                return self._get_heuristic_factor_weights(regime)
+
+        # 3. Ensure covariance matrix is positive semi-definite using Ledoit-Wolf shrinkage
+        try:
+            # Check if covariance matrix is well-conditioned
+            cov_matrix = conditional_returns.cov()
+            eigenvalues = np.linalg.eigvalsh(cov_matrix)
+            
+            if np.any(eigenvalues <= 1e-10):
+                _LOGGER.info(f"Applying Ledoit-Wolf shrinkage for {regime.value} regime covariance")
+                lw = LedoitWolf()
+                shrunk_cov = lw.fit(conditional_returns).covariance_
+                # Replace returns with synthetic data that has the shrunk covariance
+                # This preserves mean returns but uses stabilized covariance
+                mean_returns = conditional_returns.mean()
+                conditional_returns = pd.DataFrame(
+                    np.random.multivariate_normal(
+                        mean_returns, 
+                        shrunk_cov, 
+                        size=len(conditional_returns)
+                    ),
+                    columns=factor_cols,
+                    index=conditional_returns.index
+                )
+        except Exception as e:
+            _LOGGER.warning(f"Covariance shrinkage failed: {e}. Proceeding with raw data.")
+
+        # 4. Conditional Optimization using SharpeOptimizer
+        # We use the existing SharpeOptimizer but pass it the DISCONTIGUOUS filtered dataset.
+        # Note: For MVO/RiskParity the order matters less than the covariance structure.
+        try:
+            optimizer = SharpeOptimizer(
+                factor_returns=conditional_returns,
+                risk_free_rate=0.0
+            )
+            
+            # 5. Optimize using multiple methods for robustness
+            result = optimizer.optimize_blend(
+                lookback=len(conditional_returns),
+                methods=['sharpe', 'risk_parity', 'min_variance'],
+                technique='differential',
+                verbose=False
+            )
+            
+            _LOGGER.info(
+                f"Conditional optimization for {regime.value} complete: "
+                f"Sharpe={result.sharpe_ratio:.2f}, "
+                f"using {len(conditional_returns)} observations"
+            )
+            
+            return result.optimal_weights
+            
+        except Exception as e:
+            _LOGGER.error(f"Conditional optimization failed: {e}. Using fallback.")
+            if fallback_to_global:
+                return self._get_global_optimal_weights(lookback_window)
+            else:
+                return self._get_heuristic_factor_weights(regime)
+
+    def _get_global_optimal_weights(self, lookback_window: int = 252) -> Dict[str, float]:
+        """
+        Calculate globally optimal weights (not regime-specific).
+        Used as fallback when regime-specific data is insufficient.
+        """
+        if not OPTIMIZER_AVAILABLE:
+            # Equal weight fallback
+            n = len(self.factor_columns)
+            return {f: 1.0/n for f in self.factor_columns}
+        
+        recent_returns = self.factor_returns.iloc[-lookback_window:].copy()
+        
+        try:
+            optimizer = SharpeOptimizer(
+                factor_returns=recent_returns,
+                risk_free_rate=0.0
+            )
+            
+            result = optimizer.optimize_blend(
+                lookback=min(lookback_window, len(recent_returns)),
+                methods=['sharpe', 'risk_parity', 'equal'],
+                technique='differential',
+                verbose=False
+            )
+            
+            return result.optimal_weights
+        except Exception as e:
+            _LOGGER.error(f"Global optimization failed: {e}. Using equal weights.")
+            n = len(self.factor_columns)
+            return {f: 1.0/n for f in self.factor_columns}
+
     def get_regime_optimal_factors(
         self,
         regime: MarketRegime,
-        lookback: int = 63
+        lookback: int = 63,
+        use_conditional_optimization: bool = True
     ) -> Dict[str, float]:
         """
         Get optimal factor weights for a given regime.
+        
+        This method now uses conditional optimization by default (Phase 2 upgrade).
+        For backward compatibility, it can fall back to the simple Sharpe-based
+        weighting by setting use_conditional_optimization=False.
 
         Parameters
         ----------
         regime : MarketRegime
             Target regime
         lookback : int, default 63
-            Lookback period for performance calculation
+            Lookback period for performance calculation (legacy parameter)
+        use_conditional_optimization : bool, default True
+            If True, uses RS-MVO (Regime-Switching Mean-Variance Optimization).
+            If False, uses simple historical Sharpe weighting.
 
         Returns
         -------
@@ -539,6 +730,16 @@ class RegimeDetector:
         >>> optimal = detector.get_regime_optimal_factors(current.regime)
         >>> print(f"Recommended weights: {optimal}")
         """
+        if use_conditional_optimization and OPTIMIZER_AVAILABLE:
+            # Phase 2: Use RS-MVO with conditional optimization
+            return self.get_conditional_optimal_weights(
+                regime=regime,
+                lookback_window=max(lookback * 10, 252),  # Use longer history for regime filtering
+                min_observations=50,
+                fallback_to_global=True
+            )
+        
+        # Legacy simple Sharpe-based weighting
         if self.regime_history is None:
             raise RuntimeError("HMM not fitted. Call fit_hmm() first.")
 
@@ -550,9 +751,9 @@ class RegimeDetector:
         if len(regime_periods) < 10:
             _LOGGER.warning(
                 f"Only {len(regime_periods)} periods in {regime.value} regime, "
-                "using default weights"
+                "using heuristic weights"
             )
-            return self._get_default_factor_weights(regime)
+            return self._get_heuristic_factor_weights(regime)
 
         # Calculate factor performance in this regime
         factor_cols = [c for c in self.regime_history.columns
@@ -575,8 +776,18 @@ class RegimeDetector:
 
         return weights.to_dict()
 
-    def _get_default_factor_weights(self, regime: MarketRegime) -> Dict[str, float]:
-        """Get default factor weights based on regime type."""
+    def _get_heuristic_factor_weights(self, regime: MarketRegime) -> Dict[str, float]:
+        """
+        Get heuristic factor weights based on regime type.
+        
+        This is a fallback method that uses hardcoded rules based on factor names.
+        It is used when:
+        1. SharpeOptimizer is not available
+        2. Insufficient data for optimization
+        3. Explicitly requested for backward compatibility
+        
+        Note: Phase 2 replaces this with data-driven conditional optimization.
+        """
         factor_cols = [c for c in self.regime_history.columns
                       if c not in ['state', 'regime']]
 
