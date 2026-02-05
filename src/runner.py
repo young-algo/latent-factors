@@ -136,11 +136,11 @@ def main():
     Using database: ./av_cache.db
     Database found: 156.2 MB
     Database contains: 1247 price records, 523 fundamentals records
-    📅 Analysis period: 2020-04-01 onwards
-    📋 Resolving 1 symbols (ETF expansion: True)...
-    🔍 Processing symbol 1/1: SPY
-    📈 Detected ETF SPY, fetching holdings...
-    ✅ ETF SPY expanded to 503 valid constituents
+     Analysis period: 2020-04-01 onwards
+     Resolving 1 symbols (ETF expansion: True)...
+     Processing symbol 1/1: SPY
+     Detected ETF SPY, fetching holdings...
+     ETF SPY expanded to 503 valid constituents
     ... [factor discovery progress] ...
     ... [performance visualization] ...
     {'F1': 'Growth vs Value: High P/E tech vs low P/E financials', ...}
@@ -227,7 +227,7 @@ def main():
     start_date = "2020-04-01"  # Start from April 1, 2020
     frs = FactorResearchSystem(API_KEY, universe=["SPY"], factor_method="fundamental", 
                               db_path=db_path, start_date=start_date)
-    print(f"📅 Analysis period: {start_date} onwards")
+    print(f" Analysis period: {start_date} onwards")
     frs.fit_factors()
 
     # Get factor returns for a 10% volatility target.

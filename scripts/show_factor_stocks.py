@@ -16,11 +16,11 @@ def show_factor_stocks(n=5, days=14):
     try:
         perf = pd.read_csv(perf_file)
     except FileNotFoundError:
-        print(f"❌ Error: {perf_file} not found. Run quick_factor_performance.py -d {days} first")
+        print(f" Error: {perf_file} not found. Run quick_factor_performance.py -d {days} first")
         # List available files
         available = list(Path('.').glob('factor_performance_*d.csv'))
         if available:
-            print("\n📁 Available performance files:")
+            print("\n Available performance files:")
             for f in sorted(available):
                 print(f"   - {f}")
         return
@@ -29,14 +29,14 @@ def show_factor_stocks(n=5, days=14):
     try:
         summary = pd.read_csv('factor_summary.csv')
     except FileNotFoundError:
-        print("❌ Error: factor_summary.csv not found")
+        print(" Error: factor_summary.csv not found")
         return
     
-    print(f"📊 FACTOR PERFORMANCE WITH REPRESENTATIVE STOCKS ({days}-Day)")
+    print(f" FACTOR PERFORMANCE WITH REPRESENTATIVE STOCKS ({days}-Day)")
     print("=" * 80)
     
     # Best performers
-    print(f"\n🏆 TOP {n} PERFORMING FACTORS:")
+    print(f"\n TOP {n} PERFORMING FACTORS:")
     print("-" * 80)
     
     for i in range(min(n, len(perf))):
@@ -56,7 +56,7 @@ def show_factor_stocks(n=5, days=14):
             print(f"   Short: {top_short}")
     
     # Worst performers
-    print(f"\n\n📉 BOTTOM {n} PERFORMING FACTORS:")
+    print(f"\n\n BOTTOM {n} PERFORMING FACTORS:")
     print("-" * 80)
     
     for i in range(min(n, len(perf))):

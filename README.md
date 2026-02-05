@@ -71,7 +71,7 @@ Explainable AI (XAI) for factor understanding:
   - **Investment Rationale:** Actionable description of what the factor captures
   - **Top Exposures:** Top 5 long/short positions with actual loading values
   - **Conviction Score:** High/Moderate/Low based on dispersion metrics
-  - **🤖 LLM Enhancement:** Button to call OpenAI API for intuitive naming
+  - ** LLM Enhancement:** Button to call OpenAI API for intuitive naming
 - **Style Attribution:** Regression vs Fama-French factors (Value, Momentum, Quality, etc.)
 - **Liquidity Warnings:** Pre-trade execution alerts
 
@@ -134,7 +134,7 @@ tickers = frs.get_backtest_universe('2008-09-15', top_n=500)
 
 # Verify PIT is working (LEH = Lehman Brothers)
 if 'LEH' in tickers:
-    print("✓ PIT correctly includes delisted stocks")
+    print(" PIT correctly includes delisted stocks")
 
 # Verify with QA helper
 result = frs.verify_pit_universe('2008-09-15', ['LEH'])
@@ -144,11 +144,11 @@ assert result['pass'], "Survivorship bias detected!"
 ### PIT vs Legacy Comparison
 
 ```python
-# ❌ WRONG: Current constituents projected to past (biased)
+#  WRONG: Current constituents projected to past (biased)
 biased_universe = backend.get_etf_holdings("SPY")['constituent'].tolist()
 # Returns: ['AAPL', 'MSFT', 'NVDA', ...]  # LEH missing!
 
-# ✅ CORRECT: True historical state (unbiased)
+#  CORRECT: True historical state (unbiased)
 unbiased_universe = frs.get_backtest_universe('2008-09-15')
 # Returns: ['AAPL', 'MSFT', 'LEH', ...]  # LEH included!
 ```
@@ -539,13 +539,13 @@ FACTOR MOMENTUM (7-day):
   • Quality:          +0.8% [moderate]
 
 SIGNAL ALIGNMENT: 8/10
-  ✓ Regime supports momentum strategies
-  ✓ Factor signals confirm direction
-  ✓ Cross-sectional spread elevated (1.2σ)
+   Regime supports momentum strategies
+   Factor signals confirm direction
+   Cross-sectional spread elevated (1.2σ)
 
-────────────────────────────────────────────────────────────────────────────────
+
 RECOMMENDATIONS
-────────────────────────────────────────────────────────────────────────────────
+
 
 ACTION: Increase Tech-Momentum exposure
 Conviction: HIGH (8.2/10)
@@ -635,28 +635,28 @@ uv run python -m src signals cross-section --universe SPY --top-pct 0.05
 
 ```
 equity-factors/
-├── src/
-│   ├── __main__.py                 # Unified CLI entry point
-│   ├── database.py                 # Robust SQLite management
-│   ├── alphavantage_system.py      # Data backend with caching
-│   ├── research.py                 # Main research system
-│   ├── factor_optimization.py      # Factor weight optimization
-│   ├── factor_weighting.py         # Factor weighting methods
-│   ├── latent_factors.py           # Factor discovery (PCA, ICA, NMF, AE)
-│   ├── factor_labeler.py           # LLM-powered factor naming
-│   ├── decision_synthesizer.py     # Morning briefing & conviction scoring
-│   ├── trading_signals.py          # Technical indicators
-│   ├── cross_sectional.py          # Cross-sectional ranking
-│   ├── regime_detection.py         # HMM-based regime identification
-│   ├── signal_aggregator.py        # Signal combination
-│   ├── signal_backtest.py          # Walk-forward backtesting
-│   ├── dashboard.py                # Streamlit dashboard
-│   └── reporting.py                # Report generation
-├── tests/                          # Unit tests
-│   └── test_pit_universe.py        # PIT QA verification tests
-├── notebooks/                      # Jupyter notebooks
-├── pyproject.toml                  # Dependencies
-└── README.md                       # This file
+ src/
+    __main__.py                 # Unified CLI entry point
+    database.py                 # Robust SQLite management
+    alphavantage_system.py      # Data backend with caching
+    research.py                 # Main research system
+    factor_optimization.py      # Factor weight optimization
+    factor_weighting.py         # Factor weighting methods
+    latent_factors.py           # Factor discovery (PCA, ICA, NMF, AE)
+    factor_labeler.py           # LLM-powered factor naming
+    decision_synthesizer.py     # Morning briefing & conviction scoring
+    trading_signals.py          # Technical indicators
+    cross_sectional.py          # Cross-sectional ranking
+    regime_detection.py         # HMM-based regime identification
+    signal_aggregator.py        # Signal combination
+    signal_backtest.py          # Walk-forward backtesting
+    dashboard.py                # Streamlit dashboard
+    reporting.py                # Report generation
+ tests/                          # Unit tests
+    test_pit_universe.py        # PIT QA verification tests
+ notebooks/                      # Jupyter notebooks
+ pyproject.toml                  # Dependencies
+ README.md                       # This file
 ```
 
 ## Configuration

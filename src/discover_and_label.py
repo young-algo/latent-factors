@@ -283,14 +283,14 @@ def run_discovery(symbols: str, start_date: str = "2020-04-01",
     validation = validate_factor_distinctiveness(factor_ret, loadings)
     
     if not validation["is_valid"]:
-        logging.warning("⚠️  FACTOR VALIDATION FAILED")
+        logging.warning("  FACTOR VALIDATION FAILED")
         for warning in validation["warnings"]:
             logging.warning("  - %s", warning)
         logging.info("Recommendations:")
         for rec in validation["recommendations"]:
             logging.info("  + %s", rec)
     else:
-        logging.info("✅ Factor validation passed")
+        logging.info(" Factor validation passed")
 
     # ------------------- LLM naming -------------------- #
     fundamental_fields = [
@@ -340,7 +340,7 @@ def run_discovery(symbols: str, start_date: str = "2020-04-01",
     plt.tight_layout()
     plt.savefig('cumulative_factor_returns.png', dpi=150, bbox_inches='tight')
     plt.close()
-    print("📊 Factor returns chart saved to cumulative_factor_returns.png")
+    print(" Factor returns chart saved to cumulative_factor_returns.png")
 
 
 def main():

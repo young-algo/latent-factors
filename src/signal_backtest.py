@@ -37,7 +37,7 @@ Backtesting Methodologies
 Architecture
 ------------
 ```
-Historical Data ──> Signal Generation ──> Walk-Forward Test ──> Performance Metrics
+Historical Data > Signal Generation > Walk-Forward Test > Performance Metrics
        ↓                  ↓                      ↓                      ↓
    [Returns]        [All Signals]         [Out-of-Sample]      [Sharpe/Hit Rate]
 ```

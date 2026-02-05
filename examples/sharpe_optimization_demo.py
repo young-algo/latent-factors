@@ -81,12 +81,12 @@ def print_optimization_result(result: OptimizationResult, title: str):
     print(f"\nOptimal Method Allocation:")
     for method, weight in sorted(result.method_allocation.items(), key=lambda x: -x[1]):
         if weight > 0.01:
-            bar = "█" * int(weight * 50)
+            bar = "" * int(weight * 50)
             print(f"  {method:<20} {weight:>6.1%} {bar}")
     
     print(f"\nOptimal Factor Weights:")
     for factor, weight in sorted(result.optimal_weights.items(), key=lambda x: -x[1]):
-        bar = "█" * int(weight * 50)
+        bar = "" * int(weight * 50)
         print(f"  {factor:<20} {weight:>6.1%} {bar}")
     
     print(f"\nPerformance Metrics:")
@@ -385,11 +385,11 @@ RECOMMENDED WORKFLOW FOR PRODUCTION:
 
 IMPORTANT CAVEATS:
 
-⚠️  Past performance does not guarantee future results
-⚠️  Optimization can overfit to historical data
-⚠️  Walk-forward testing is essential
-⚠️  Transaction costs matter significantly
-⚠️  Factor regimes change over time
+  Past performance does not guarantee future results
+  Optimization can overfit to historical data
+  Walk-forward testing is essential
+  Transaction costs matter significantly
+  Factor regimes change over time
 
     """)
 

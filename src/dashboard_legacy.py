@@ -55,7 +55,7 @@ def load_data():
 
 def create_signal_dashboard(momentum_analyzer: FactorMomentumAnalyzer):
     """Create signal status dashboard."""
-    st.header("📡 Trading Signals")
+    st.header(" Trading Signals")
 
     # Signal summary
     signal_summary = momentum_analyzer.get_signal_summary()
@@ -82,7 +82,7 @@ def create_signal_dashboard(momentum_analyzer: FactorMomentumAnalyzer):
         st.dataframe(styled_summary, width='stretch')
 
         # Extreme alerts panel
-        st.subheader("🚨 Extreme Value Alerts")
+        st.subheader(" Extreme Value Alerts")
         extreme_alerts = momentum_analyzer.get_all_extreme_alerts()
 
         if extreme_alerts:
@@ -114,7 +114,7 @@ def create_signal_dashboard(momentum_analyzer: FactorMomentumAnalyzer):
 
 def create_momentum_charts(momentum_analyzer: FactorMomentumAnalyzer, factor_name: str):
     """Create momentum charts with RSI/MACD overlays."""
-    st.subheader(f"📈 Momentum Analysis: {factor_name}")
+    st.subheader(f" Momentum Analysis: {factor_name}")
 
     col1, col2 = st.columns(2)
 
@@ -158,7 +158,7 @@ def create_momentum_charts(momentum_analyzer: FactorMomentumAnalyzer, factor_nam
 
 def create_regime_gauge(regime_detector: RegimeDetector):
     """Create regime probability gauge chart."""
-    st.header("🎯 Market Regime")
+    st.header(" Market Regime")
 
     try:
         current_regime = regime_detector.detect_current_regime()
@@ -194,7 +194,7 @@ def create_regime_gauge(regime_detector: RegimeDetector):
 
 def create_cross_sectional_heatmap(cross_analyzer: CrossSectionalAnalyzer):
     """Create cross-sectional ranking heatmap."""
-    st.header("🔥 Cross-Sectional Rankings")
+    st.header(" Cross-Sectional Rankings")
 
     # Calculate scores and rankings
     scores = cross_analyzer.calculate_factor_scores()
@@ -229,7 +229,7 @@ def create_cross_sectional_heatmap(cross_analyzer: CrossSectionalAnalyzer):
 
 def create_optimization_panel(returns: pd.DataFrame, loadings: pd.DataFrame, factor_names: dict):
     """Create factor weight optimization panel."""
-    st.header("🎯 Factor Weight Optimization")
+    st.header(" Factor Weight Optimization")
     
     with st.expander("Configure Optimization", expanded=True):
         col1, col2, col3 = st.columns(3)
@@ -259,7 +259,7 @@ def create_optimization_panel(returns: pd.DataFrame, loadings: pd.DataFrame, fac
             with col2:
                 test_window = st.slider("Test Window (days)", 5, 126, 21, key="wf_test")
     
-    if st.button("🚀 Run Optimization", type="primary"):
+    if st.button(" Run Optimization", type="primary"):
         if len(methods) < 2:
             st.error("Please select at least 2 methods to blend.")
             return
@@ -385,14 +385,14 @@ def create_optimization_panel(returns: pd.DataFrame, loadings: pd.DataFrame, fac
 
 def create_basket_generator(loadings: pd.DataFrame, factor_names: dict):
     """Create tradeable basket generator panel."""
-    st.header("🧺 Tradeable Basket Generator")
+    st.header(" Tradeable Basket Generator")
     
     # Check if optimization results exist
     has_single_opt = 'opt_result' in st.session_state
     has_wf_opt = 'wf_results' in st.session_state
     
     if not (has_single_opt or has_wf_opt):
-        st.info("👆 Run Factor Weight Optimization first to generate a tradeable basket.")
+        st.info(" Run Factor Weight Optimization first to generate a tradeable basket.")
         return
     
     # Source selection
@@ -423,7 +423,7 @@ def create_basket_generator(loadings: pd.DataFrame, factor_names: dict):
             net_exposure = st.slider("Net Exposure", 0.0, 2.0, 1.0,
                                     help="1.0 = 100% net long, 0.0 = market neutral", key="bg_exposure")
     
-    if st.button("📊 Generate Basket", type="primary"):
+    if st.button(" Generate Basket", type="primary"):
         try:
             # Get factor weights from optimization results
             if use_wf:
@@ -475,7 +475,7 @@ def create_basket_generator(loadings: pd.DataFrame, factor_names: dict):
             col1, col2 = st.columns(2)
             
             with col1:
-                st.markdown(f"**📈 TOP {n_long} LONG POSITIONS:**")
+                st.markdown(f"** TOP {n_long} LONG POSITIONS:**")
                 long_df = positions[positions['side'] == 'LONG'].copy()
                 if factor_names:
                     long_df['name'] = long_df.index.map(lambda x: factor_names.get(x, ''))
@@ -489,7 +489,7 @@ def create_basket_generator(loadings: pd.DataFrame, factor_names: dict):
                 )
             
             with col2:
-                st.markdown(f"**📉 TOP {n_short} SHORT POSITIONS:**")
+                st.markdown(f"** TOP {n_short} SHORT POSITIONS:**")
                 short_df = positions[positions['side'] == 'SHORT'].copy()
                 st.dataframe(
                     short_df[['ticker', 'composite_score', 'target_weight', 'position_dollars']].style.format({
@@ -542,7 +542,7 @@ def create_basket_generator(loadings: pd.DataFrame, factor_names: dict):
             # Export option
             csv = positions.to_csv(index=False)
             st.download_button(
-                label="📥 Download Basket as CSV",
+                label=" Download Basket as CSV",
                 data=csv,
                 file_name=f"trade_basket_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
@@ -556,7 +556,7 @@ def create_basket_generator(loadings: pd.DataFrame, factor_names: dict):
 
 def create_factor_characteristics_panel(returns: pd.DataFrame, loadings: pd.DataFrame, factor_names: dict):
     """Create factor characteristics panel."""
-    st.header("📋 Factor Characteristics")
+    st.header(" Factor Characteristics")
     
     lookback = st.slider("Lookback Period (days)", 21, 252, 63, key="char_lookback")
     
@@ -633,22 +633,22 @@ def create_factor_characteristics_panel(returns: pd.DataFrame, loadings: pd.Data
 
 def create_database_health_panel():
     """Create database health monitor panel."""
-    st.header("🗄️ Database Health Monitor")
+    st.header(" Database Health Monitor")
     
     try:
         health = check_database_health()
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            exists = "✅ Yes" if health['exists'] else "❌ No"
+            exists = " Yes" if health['exists'] else " No"
             st.metric("Database Exists", exists)
         with col2:
             st.metric("Size (MB)", f"{health['size_mb']:.1f}")
         with col3:
-            locked = "🔒 Locked" if health['is_locked'] else "🔓 Unlocked"
+            locked = " Locked" if health['is_locked'] else " Unlocked"
             st.metric("Lock Status", locked)
         with col4:
-            healthy = "✅ Healthy" if health['is_healthy'] else "⚠️ Issues"
+            healthy = " Healthy" if health['is_healthy'] else " Issues"
             st.metric("Health", healthy)
         
         if health['tables']:
@@ -672,7 +672,7 @@ def create_database_health_panel():
 
 def create_pit_universe_panel():
     """Create Point-in-Time (PIT) Universe Construction panel."""
-    st.header("⏰ Point-in-Time (PIT) Universe Construction")
+    st.header(" Point-in-Time (PIT) Universe Construction")
     
     st.markdown("""
     **Eliminate survivorship bias from backtesting by reconstructing true historical market state.**
@@ -703,7 +703,7 @@ def create_pit_universe_panel():
     # PIT Stats
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("PIT Table Exists", "✅ Yes" if pit_exists else "❌ No")
+        st.metric("PIT Table Exists", " Yes" if pit_exists else " No")
     with col2:
         st.metric("Stored Universe Dates", num_dates)
     with col3:
@@ -748,10 +748,10 @@ def create_pit_universe_panel():
             help="Only fetch active listings (not recommended for backtesting)"
         )
         
-        if st.button("🔨 Build PIT Universe", type="primary"):
+        if st.button(" Build PIT Universe", type="primary"):
             api_key = config.ALPHAVANTAGE_API_KEY
             if not api_key:
-                st.error("❌ ALPHAVANTAGE_API_KEY not configured. Set it in .env file.")
+                st.error(" ALPHAVANTAGE_API_KEY not configured. Set it in .env file.")
             else:
                 try:
                     with st.spinner("Initializing DataBackend..."):
@@ -780,7 +780,7 @@ def create_pit_universe_panel():
                         status_text.text("Complete!")
                         
                         if not universe_df.empty:
-                            st.success(f"✅ Built PIT universe: {len(universe_df)} stocks")
+                            st.success(f" Built PIT universe: {len(universe_df)} stocks")
                             
                             # Show summary stats
                             active_count = (universe_df['status'] == 'Active').sum()
@@ -817,13 +817,13 @@ def create_pit_universe_panel():
                             # Export option
                             csv = universe_df.to_csv(index=False)
                             st.download_button(
-                                label="📥 Download Universe as CSV",
+                                label=" Download Universe as CSV",
                                 data=csv,
                                 file_name=f"pit_universe_{pit_date.strftime('%Y%m%d')}.csv",
                                 mime="text/csv"
                             )
                         else:
-                            st.error("❌ Failed to build universe. Check API key and try again.")
+                            st.error(" Failed to build universe. Check API key and try again.")
                             
                 except Exception as e:
                     st.error(f"Error building PIT universe: {e}")
@@ -854,7 +854,7 @@ def create_pit_universe_panel():
                 
                 view_top_n = st.slider("Show Top N", 10, 1000, 100)
                 
-                if st.button("🔍 View Universe"):
+                if st.button(" View Universe"):
                     with get_db_connection() as conn:
                         query = """
                             SELECT ticker, asset_type, status, dollar_volume
@@ -901,9 +901,9 @@ def create_pit_universe_panel():
                         found_delisted = known_delisted.intersection(set(view_df['ticker'].tolist()))
                         
                         if found_delisted:
-                            st.success(f"✅ PIT Universe includes known delisted tickers: {', '.join(found_delisted)}")
+                            st.success(f" PIT Universe includes known delisted tickers: {', '.join(found_delisted)}")
                         elif delisted_count > 0:
-                            st.info(f"ℹ️ Delisted stocks present but no famous bankruptcies found in top {view_top_n}")
+                            st.info(f"ℹ Delisted stocks present but no famous bankruptcies found in top {view_top_n}")
                     else:
                         st.warning(f"No data found for {view_date}")
                         
@@ -929,7 +929,7 @@ def create_pit_universe_panel():
             st.markdown("**Test 1: Lehman Brothers**")
             st.caption("Date: 2008-09-15 (Bankruptcy)")
             
-            if st.button("🧪 Run LEH Test"):
+            if st.button(" Run LEH Test"):
                 api_key = config.ALPHAVANTAGE_API_KEY
                 if not api_key:
                     st.error("ALPHAVANTAGE_API_KEY not configured")
@@ -945,10 +945,10 @@ def create_pit_universe_panel():
                             result = frs.verify_pit_universe('2008-09-15', ['LEH'])
                             
                             if result['pass']:
-                                st.success(f"✅ PASS: LEH found in universe ({result['universe_size']} total stocks)")
+                                st.success(f" PASS: LEH found in universe ({result['universe_size']} total stocks)")
                             else:
-                                st.error(f"❌ FAIL: LEH missing! Found: {result['found']}, Missing: {result['missing']}")
-                                st.warning("⚠️ Survivorship bias detected - do not deploy to live capital!")
+                                st.error(f" FAIL: LEH missing! Found: {result['found']}, Missing: {result['missing']}")
+                                st.warning(" Survivorship bias detected - do not deploy to live capital!")
                         except Exception as e:
                             st.error(f"Test error: {e}")
         
@@ -956,7 +956,7 @@ def create_pit_universe_panel():
             st.markdown("**Test 2: Silicon Valley Bank**")
             st.caption("Date: 2023-01-01 (Pre-failure)")
             
-            if st.button("🧪 Run SIVB Test"):
+            if st.button(" Run SIVB Test"):
                 api_key = config.ALPHAVANTAGE_API_KEY
                 if not api_key:
                     st.error("ALPHAVANTAGE_API_KEY not configured")
@@ -972,10 +972,10 @@ def create_pit_universe_panel():
                             result = frs.verify_pit_universe('2023-01-01', ['SIVB'])
                             
                             if result['pass']:
-                                st.success(f"✅ PASS: SIVB found in universe ({result['universe_size']} total stocks)")
+                                st.success(f" PASS: SIVB found in universe ({result['universe_size']} total stocks)")
                             else:
-                                st.error(f"❌ FAIL: SIVB missing! Found: {result['found']}, Missing: {result['missing']}")
-                                st.warning("⚠️ Survivorship bias detected - do not deploy to live capital!")
+                                st.error(f" FAIL: SIVB missing! Found: {result['found']}, Missing: {result['missing']}")
+                                st.warning(" Survivorship bias detected - do not deploy to live capital!")
                         except Exception as e:
                             st.error(f"Test error: {e}")
         
@@ -994,7 +994,7 @@ def create_pit_universe_panel():
             help="Enter ticker symbols to verify presence in the universe"
         )
         
-        if st.button("🔍 Check Tickers"):
+        if st.button(" Check Tickers"):
             try:
                 with get_db_connection() as conn:
                     cursor = conn.cursor()
@@ -1015,14 +1015,14 @@ def create_pit_universe_panel():
                             info = universe_tickers[ticker]
                             results.append({
                                 'Ticker': ticker,
-                                'Present': '✅ Yes',
+                                'Present': ' Yes',
                                 'Status': info['status'],
                                 'Dollar Volume': f"{info['dv']:,.0f}"
                             })
                         else:
                             results.append({
                                 'Ticker': ticker,
-                                'Present': '❌ No',
+                                'Present': ' No',
                                 'Status': 'N/A',
                                 'Dollar Volume': 'N/A'
                             })
@@ -1031,7 +1031,7 @@ def create_pit_universe_panel():
                     st.dataframe(results_df, width='stretch')
                     
                     # Summary
-                    present_count = sum(1 for r in results if r['Present'] == '✅ Yes')
+                    present_count = sum(1 for r in results if r['Present'] == ' Yes')
                     if present_count == len(results):
                         st.success(f"All {len(results)} tickers found!")
                     else:
@@ -1042,12 +1042,12 @@ def create_pit_universe_panel():
 
 
 def main():
-    st.title("📊 Equity Factors Research Dashboard")
+    st.title(" Equity Factors Research Dashboard")
 
     returns, loadings, names = load_data()
 
     if returns is None:
-        st.error("❌ Data not found. Please run 'python -m src discover' first.")
+        st.error(" Data not found. Please run 'python -m src discover' first.")
         return
 
     # Initialize analyzers
@@ -1189,7 +1189,7 @@ def main():
     # --- Regime Section ---
     st.divider()
     if regime_detector:
-        st.header("📊 Regime Analysis")
+        st.header(" Regime Analysis")
 
         try:
             regime_summary = regime_detector.get_regime_summary()
@@ -1232,21 +1232,21 @@ def main():
     
     # --- Database Health Section (Sidebar) ---
     st.sidebar.divider()
-    with st.sidebar.expander("🗄️ Database Health"):
+    with st.sidebar.expander(" Database Health"):
         try:
             health = check_database_health()
-            st.write(f"**Exists:** {'✅' if health['exists'] else '❌'}")
+            st.write(f"**Exists:** {'' if health['exists'] else ''}")
             st.write(f"**Size:** {health['size_mb']:.1f} MB")
-            st.write(f"**Status:** {'✅ Healthy' if health['is_healthy'] else '⚠️ Issues'}")
+            st.write(f"**Status:** {' Healthy' if health['is_healthy'] else ' Issues'}")
             if health['errors']:
                 st.write("**Errors:**")
                 for err in health['errors']:
                     st.write(f"- {err}")
         except Exception as e:
-            st.write(f"⚠️ Could not check: {e}")
+            st.write(f" Could not check: {e}")
     
     # PIT Quick Stats in Sidebar
-    with st.sidebar.expander("⏰ PIT Universe Status"):
+    with st.sidebar.expander(" PIT Universe Status"):
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -1268,9 +1268,9 @@ def main():
                     if latest:
                         st.write(f"**Latest:** {latest}")
                 else:
-                    st.write("⚠️ PIT table not initialized")
+                    st.write(" PIT table not initialized")
         except Exception as e:
-            st.write(f"⚠️ Could not check: {e}")
+            st.write(f" Could not check: {e}")
 
 if __name__ == "__main__":
     main()

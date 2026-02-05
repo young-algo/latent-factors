@@ -29,26 +29,26 @@ echo ""
 
 # Check if we're in the right directory
 if [ ! -f "pyproject.toml" ]; then
-    echo "❌ Error: Must run from project root directory"
+    echo " Error: Must run from project root directory"
     exit 1
 fi
 
 # Activate virtual environment
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
-    echo "✓ Virtual environment activated"
+    echo " Virtual environment activated"
 else
-    echo "⚠️  Warning: Virtual environment not found at .venv/"
+    echo "  Warning: Virtual environment not found at .venv/"
 fi
 
 # Check if data exists
 if [ ! -f "factor_returns.csv" ]; then
-    echo "⚠️  Warning: factor_returns.csv not found"
+    echo "  Warning: factor_returns.csv not found"
     echo "   Run: python -m src discover --universe VTHR"
     echo ""
 fi
 
-echo "📊 Launching Alpha Command Center..."
+echo " Launching Alpha Command Center..."
 echo "   URL: http://localhost:$PORT"
 echo ""
 echo "Press Ctrl+C to stop"

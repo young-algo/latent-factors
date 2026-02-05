@@ -59,7 +59,7 @@ def get_api_key():
         validate_config(require_alpha_vantage=True)
         return config.ALPHAVANTAGE_API_KEY
     except ValueError as e:
-        print(f"❌ Configuration Error: {e}")
+        print(f" Configuration Error: {e}")
         sys.exit(1)
 
 
@@ -69,7 +69,7 @@ def get_api_key():
 
 def cmd_discover(args):
     """Run the factor discovery workflow."""
-    print(f"🚀 Starting factor discovery for {args.symbols}...")
+    print(f" Starting factor discovery for {args.symbols}...")
     try:
         run_discovery(
             symbols=args.symbols,
@@ -79,9 +79,9 @@ def cmd_discover(args):
             rolling=args.rolling,
             name_out=args.name_out
         )
-        print("\n✅ Factor discovery complete!")
+        print("\n Factor discovery complete!")
     except Exception as e:
-        print(f"\n❌ Error during discovery: {e}")
+        print(f"\n Error during discovery: {e}")
         sys.exit(1)
 
 
@@ -94,12 +94,12 @@ def load_or_generate_factors(universe, method='fundamental', n_components=8, exp
     cache_file = f"factor_cache_{'_'.join(universe)}_{method}.pkl"
     
     if Path(cache_file).exists() and not os.getenv('EQUITY_FACTORS_REFRESH_CACHE'):
-        print(f"📂 Loading cached factors from {cache_file}")
+        print(f" Loading cached factors from {cache_file}")
         import pickle
         with open(cache_file, 'rb') as f:
             return pickle.load(f)
     
-    print(f"🔍 Generating factors for universe: {', '.join(universe)}")
+    print(f" Generating factors for universe: {', '.join(universe)}")
     from src.research import FactorResearchSystem
     
     frs = FactorResearchSystem(
@@ -122,7 +122,7 @@ def load_or_generate_factors(universe, method='fundamental', n_components=8, exp
 def cmd_signals_generate(args):
     """Generate comprehensive trading signals."""
     print("=" * 70)
-    print("📊 GENERATING TRADING SIGNALS")
+    print(" GENERATING TRADING SIGNALS")
     print("=" * 70)
     
     frs, returns, loadings = load_or_generate_factors(
@@ -137,13 +137,13 @@ def cmd_signals_generate(args):
     
     if args.output:
         frs.export_signals(args.output)
-        print(f"\n💾 Signals exported to: {args.output}")
+        print(f"\n Signals exported to: {args.output}")
 
 
 def cmd_signals_extremes(args):
     """Show extreme value alerts."""
     print("=" * 70)
-    print("🚨 EXTREME VALUE ALERTS")
+    print(" EXTREME VALUE ALERTS")
     print("=" * 70)
     
     from src.trading_signals import FactorMomentumAnalyzer
@@ -157,7 +157,7 @@ def cmd_signals_extremes(args):
     )
     
     if not alerts:
-        print("\n✅ No extreme value alerts at this time.")
+        print("\n No extreme value alerts at this time.")
         return
     
     print(f"\nFound {len(alerts)} extreme alerts:\n")
@@ -165,11 +165,11 @@ def cmd_signals_extremes(args):
     print("-" * 70)
     
     for alert in alerts:
-        direction = "🔴 EXTREME HIGH" if alert.direction == 'extreme_high' else "🟢 EXTREME LOW"
+        direction = " EXTREME HIGH" if alert.direction == 'extreme_high' else "🟢 EXTREME LOW"
         print(f"{alert.factor_name:<15} {alert.z_score:>10.2f} {alert.percentile:>11.1f}% {direction:<15} {alert.alert_type:<20}")
     
     if args.trade:
-        print("\n💡 Trading Implications:")
+        print("\n Trading Implications:")
         for alert in alerts:
             if alert.direction == 'extreme_high':
                 print(f"   → Consider SHORT on {alert.factor_name} (mean reversion)")
@@ -180,7 +180,7 @@ def cmd_signals_extremes(args):
 def cmd_signals_momentum(args):
     """Analyze factor momentum."""
     print("=" * 70)
-    print("📈 FACTOR MOMENTUM ANALYSIS")
+    print(" FACTOR MOMENTUM ANALYSIS")
     print("=" * 70)
     
     from src.trading_signals import FactorMomentumAnalyzer
@@ -200,8 +200,8 @@ def cmd_signals_momentum(args):
     for factor in factors:
         signals = analyzer.get_momentum_signals(factor)
         
-        rsi_emoji = "🔴" if signals['rsi'] > 70 else "🟢" if signals['rsi'] < 30 else "⚪"
-        macd_emoji = "🟢" if 'bullish' in signals['macd_signal'] else "🔴" if 'bearish' in signals['macd_signal'] else "⚪"
+        rsi_emoji = "" if signals['rsi'] > 70 else "🟢" if signals['rsi'] < 30 else ""
+        macd_emoji = "🟢" if 'bullish' in signals['macd_signal'] else "" if 'bearish' in signals['macd_signal'] else ""
         
         print(f"{factor:<15} {rsi_emoji}{signals['rsi']:>6.1f} {signals['rsi_signal']:<15} "
               f"{macd_emoji} {signals['macd_signal']:<12} {signals['adx']:>7.1f} {signals['regime']:<20}")
@@ -210,7 +210,7 @@ def cmd_signals_momentum(args):
 def cmd_signals_cross_section(args):
     """Generate cross-sectional rankings."""
     print("=" * 70)
-    print("🔥 CROSS-SECTIONAL RANKINGS")
+    print(" CROSS-SECTIONAL RANKINGS")
     print("=" * 70)
     
     from src.cross_sectional import CrossSectionalAnalyzer
@@ -228,14 +228,14 @@ def cmd_signals_cross_section(args):
     longs = [s for s in signals if s.direction.value == 'long']
     shorts = [s for s in signals if s.direction.value == 'short']
     
-    print(f"\n📈 TOP {int(args.top_pct*100)}% LONG CANDIDATES:")
+    print(f"\n TOP {int(args.top_pct*100)}% LONG CANDIDATES:")
     print("-" * 70)
     print(f"{'Ticker':<10} {'Score':>10} {'Decile':>8} {'Rank':>8} {'Conf':>8}")
     print("-" * 70)
     for sig in sorted(longs, key=lambda x: x.rank)[:args.limit]:
         print(f"{sig.ticker:<10} {sig.composite_score:>10.4f} {sig.decile:>8} {sig.rank:>8} {sig.confidence:>7.1%}")
     
-    print(f"\n📉 TOP {int(args.bottom_pct*100)}% SHORT CANDIDATES:")
+    print(f"\n TOP {int(args.bottom_pct*100)}% SHORT CANDIDATES:")
     print("-" * 70)
     print(f"{'Ticker':<10} {'Score':>10} {'Decile':>8} {'Rank':>8} {'Conf':>8}")
     print("-" * 70)
@@ -244,7 +244,7 @@ def cmd_signals_cross_section(args):
     
     if args.output:
         rankings.to_csv(args.output)
-        print(f"\n💾 Rankings exported to: {args.output}")
+        print(f"\n Rankings exported to: {args.output}")
 
 
 # =============================================================================
@@ -254,7 +254,7 @@ def cmd_signals_cross_section(args):
 def cmd_regime_detect(args):
     """Detect market regime."""
     print("=" * 70)
-    print("🎯 MARKET REGIME DETECTION")
+    print(" MARKET REGIME DETECTION")
     print("=" * 70)
 
     from src.regime_detection import RegimeDetector
@@ -274,8 +274,9 @@ def cmd_regime_detect(args):
 
     factors_needing_names = [f for f in loadings.columns if f not in factor_names]
     if factors_needing_names and validate_api_key() and frs is not None:
-        print(f"\n🏷️  Generating names for {len(factors_needing_names)} factors...")
-        fundamentals = frs.get_fundamentals() if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
+        print(f"\n  Generating names for {len(factors_needing_names)} factors...")
+        tickers = list(loadings.index)
+        fundamentals = frs.get_fundamentals(tickers) if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
         new_names = batch_name_factors(
             factor_exposures=loadings[factors_needing_names],
             fundamentals=fundamentals,
@@ -288,39 +289,39 @@ def cmd_regime_detect(args):
         with open(names_cache_file, 'w') as f:
             json.dump(factor_names, f, indent=2)
 
-    print(f"\n🔍 Fitting HMM with {args.regimes} regimes...")
+    print(f"\n Fitting HMM with {args.regimes} regimes...")
     detector = RegimeDetector(returns)
     detector.fit_hmm(n_regimes=args.regimes)
 
     current = detector.detect_current_regime()
     allocation = detector.generate_regime_signals()
 
-    print(f"\n📊 CURRENT REGIME:")
+    print(f"\n CURRENT REGIME:")
     print(f"   Regime: {current.regime.value.replace('_', ' ').title()}")
     print(f"   Confidence: {current.probability:.1%}")
     print(f"   Volatility: {current.volatility:.2%}")
     print(f"   Trend: {current.trend:.4f}")
     print(f"   Description: {current.description}")
 
-    print(f"\n💼 ALLOCATION RECOMMENDATION:")
+    print(f"\n ALLOCATION RECOMMENDATION:")
     print(f"   Risk-on Score: {allocation.risk_on_score:.2f} (0=defensive, 1=aggressive)")
     print(f"   Defensive Tilt: {'Yes' if allocation.defensive_tilt else 'No'}")
     print(f"   Action: {allocation.recommended_action}")
 
-    print(f"\n📈 OPTIMAL FACTOR WEIGHTS:")
+    print(f"\n OPTIMAL FACTOR WEIGHTS:")
     for factor, weight in sorted(allocation.factor_weights.items(), key=lambda x: x[1], reverse=True):
-        bar = "█" * int(weight * 50)
+        bar = "" * int(weight * 50)
         display_name = factor_names.get(factor, factor)
         print(f"   {display_name:<30} {weight:>6.2%} {bar}")
     
     if args.predict:
-        print(f"\n🔮 REGIME PREDICTIONS (Next {args.predict} days):")
+        print(f"\n REGIME PREDICTIONS (Next {args.predict} days):")
         predictions = detector.predict_regime(duration=args.predict)
         for i, pred in enumerate(predictions, 1):
             print(f"   Day {i}: {pred.regime.value.replace('_', ' ').title()} (prob: {pred.probability:.1%})")
     
     if args.summary:
-        print("\n📋 REGIME STATISTICS:")
+        print("\n REGIME STATISTICS:")
         summary = detector.get_regime_summary()
         print(summary.to_string(index=False))
 
@@ -332,7 +333,7 @@ def cmd_regime_detect(args):
 def cmd_backtest(args):
     """Backtest signal performance."""
     print("=" * 70)
-    print("📊 SIGNAL BACKTEST")
+    print(" SIGNAL BACKTEST")
     print("=" * 70)
     
     from src.trading_signals import FactorMomentumAnalyzer
@@ -357,7 +358,7 @@ def cmd_backtest(args):
     # Get returns data for backtesting
     returns_data = returns
     
-    print(f"\n🔍 Running walk-forward backtest...")
+    print(f"\n Running walk-forward backtest...")
     print(f"   Train size: {args.train_size} days")
     print(f"   Test size: {args.test_size} days")
     print(f"   Walks: {args.walks}")
@@ -372,7 +373,7 @@ def cmd_backtest(args):
             min_confidence=args.confidence
         )
         
-        print(f"\n📈 BACKTEST RESULTS:")
+        print(f"\n BACKTEST RESULTS:")
         print(f"   Total Return: {results['total_return']:.2%}")
         print(f"   Annualized Return: {results['annualized_return']:.2%}")
         print(f"   Volatility: {results['volatility']:.2%}")
@@ -384,7 +385,7 @@ def cmd_backtest(args):
         print(f"   Number of Trades: {results['num_trades']}")
         
         if args.optimize:
-            print(f"\n🔧 OPTIMIZING THRESHOLDS...")
+            print(f"\n OPTIMIZING THRESHOLDS...")
             optimal = backtester.optimize_thresholds(
                 metric=args.metric,
                 n_steps=args.steps
@@ -398,10 +399,10 @@ def cmd_backtest(args):
             
         if args.output:
             backtester.export_results_to_csv(args.output)
-            print(f"\n💾 Results exported to: {args.output}")
+            print(f"\n Results exported to: {args.output}")
     
     except Exception as e:
-        print(f"❌ Backtest failed: {e}")
+        print(f" Backtest failed: {e}")
         import traceback
         traceback.print_exc()
 
@@ -414,10 +415,10 @@ def cmd_dashboard(args):
     """Launch Streamlit dashboard."""
     dashboard_path = Path(__file__).parent / "dashboard.py"
     if not dashboard_path.exists():
-        print("⚠️  Dashboard file not found.")
+        print("  Dashboard file not found.")
         sys.exit(1)
     
-    print("🚀 Launching Streamlit dashboard...")
+    print(" Launching Streamlit dashboard...")
     print("   URL: http://localhost:8501")
     print("   Press Ctrl+C to stop")
     print("-" * 70)
@@ -437,10 +438,10 @@ def cmd_dashboard(args):
             env=env
         )
     except FileNotFoundError:
-        print("❌ Streamlit not found. Install with: uv add streamlit")
+        print(" Streamlit not found. Install with: uv add streamlit")
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\n👋 Dashboard stopped.")
+        print("\n Dashboard stopped.")
 
 
 # =============================================================================
@@ -453,14 +454,14 @@ def cmd_report(args):
     
     if args.type == "html":
         output_path = output_path if output_path.endswith('.html') else f"{output_path}.html"
-        print(f"📄 Generating HTML report: {output_path}")
+        print(f" Generating HTML report: {output_path}")
         generate_daily_report(output_path)
     else:
         output_path = output_path if output_path.endswith('.md') else f"{output_path}.md"
-        print(f"📄 Generating Markdown report: {output_path}")
+        print(f" Generating Markdown report: {output_path}")
         generate_detailed_markdown_report(output_path)
     
-    print(f"\n💾 Report saved to: {output_path}")
+    print(f"\n Report saved to: {output_path}")
     
     if args.open:
         import webbrowser
@@ -481,9 +482,9 @@ def cmd_briefing(args):
     from pathlib import Path
     import json
 
-    print("═" * 70)
-    print("📋 GENERATING MORNING BRIEFING")
-    print("═" * 70)
+    print("" * 70)
+    print(" GENERATING MORNING BRIEFING")
+    print("" * 70)
 
     # Load or generate factors
     cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.method}.pkl"
@@ -500,11 +501,11 @@ def cmd_briefing(args):
     )
 
     if Path(cache_file).exists():
-        print(f"\n📂 Loading cached factors from {cache_file}")
+        print(f"\n Loading cached factors from {cache_file}")
         with open(cache_file, 'rb') as f:
             factor_returns, factor_loadings = pickle.load(f)
     else:
-        print(f"\n🔍 Generating factors for {', '.join(args.universe)}...")
+        print(f"\n Generating factors for {', '.join(args.universe)}...")
         frs.fit_factors()
         factor_returns = frs.get_factor_returns()
         factor_loadings = frs._expos
@@ -518,7 +519,7 @@ def cmd_briefing(args):
 
     # Try to load cached names first
     if Path(names_cache_file).exists():
-        print(f"\n📂 Loading cached factor names from {names_cache_file}")
+        print(f"\n Loading cached factor names from {names_cache_file}")
         with open(names_cache_file, 'r') as f:
             factor_names = json.load(f)
 
@@ -526,10 +527,11 @@ def cmd_briefing(args):
     factors_needing_names = [f for f in factor_loadings.columns if f not in factor_names]
 
     if factors_needing_names and validate_api_key():
-        print(f"\n🏷️  Generating names for {len(factors_needing_names)} factors...")
+        print(f"\n  Generating names for {len(factors_needing_names)} factors...")
 
-        # Get fundamentals for naming context
-        fundamentals = frs.get_fundamentals() if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
+        # Get fundamentals for naming context (pass tickers from loadings index)
+        tickers = list(factor_loadings.index)
+        fundamentals = frs.get_fundamentals(tickers) if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
 
         # Generate names with full enrichment
         new_names = batch_name_factors(
@@ -547,14 +549,14 @@ def cmd_briefing(args):
         # Cache names for next time
         with open(names_cache_file, 'w') as f:
             json.dump(factor_names, f, indent=2)
-        print(f"   💾 Cached names to {names_cache_file}")
+        print(f"    Cached names to {names_cache_file}")
     elif factors_needing_names:
-        print("\n⚠️  OpenAI API key not available - using factor IDs as names")
+        print("\n  OpenAI API key not available - using factor IDs as names")
         for f in factors_needing_names:
             factor_names[f] = f
 
     # Generate briefing
-    print("\n🔮 Analyzing signals...")
+    print("\n Analyzing signals...")
     synthesizer = DecisionSynthesizer()
 
     state = synthesizer.collect_all_signals(
@@ -580,7 +582,7 @@ def cmd_briefing(args):
 
         with open(output_path, 'w') as f:
             f.write(briefing)
-        print(f"\n💾 Briefing saved to: {output_path}")
+        print(f"\n Briefing saved to: {output_path}")
 
 
 # =============================================================================
@@ -593,16 +595,16 @@ def cmd_clean(args):
         db_path = Path("av_cache.db")
         if db_path.exists():
             db_path.unlink()
-            print("🗑️  Deleted av_cache.db")
+            print("  Deleted av_cache.db")
         else:
-            print("⚠️  Cache file not found.")
+            print("  Cache file not found.")
         
         # Also clean factor cache files
         import glob
         cache_files = glob.glob("factor_cache_*.pkl")
         for f in cache_files:
             Path(f).unlink()
-            print(f"🗑️  Deleted {f}")
+            print(f"  Deleted {f}")
         
         if not cache_files:
             print("No factor cache files found.")
@@ -616,7 +618,7 @@ def cmd_clean(args):
 def cmd_optimize(args):
     """Optimize factor weights for maximum Sharpe ratio."""
     print("=" * 70)
-    print("🎯 FACTOR WEIGHT OPTIMIZATION")
+    print(" FACTOR WEIGHT OPTIMIZATION")
     print("=" * 70)
 
     from src.factor_optimization import SharpeOptimizer
@@ -627,7 +629,7 @@ def cmd_optimize(args):
     import pickle
 
     # Load or generate factors
-    print(f"\n📊 Loading factor data for universe: {', '.join(args.universe)}")
+    print(f"\n Loading factor data for universe: {', '.join(args.universe)}")
 
     cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.factor_method}.pkl"
     names_cache_file = f"factor_names_{'_'.join(args.universe)}_{args.factor_method}.json"
@@ -642,11 +644,11 @@ def cmd_optimize(args):
     )
 
     if Path(cache_file).exists():
-        print(f"📂 Loading cached factors from {cache_file}")
+        print(f" Loading cached factors from {cache_file}")
         with open(cache_file, 'rb') as f:
             factor_returns, factor_loadings = pickle.load(f)
     else:
-        print(f"🔍 Generating factors using '{args.factor_method}' method (this may take a while)...")
+        print(f" Generating factors using '{args.factor_method}' method (this may take a while)...")
         frs.fit_factors()
         factor_returns = frs.get_factor_returns()
         factor_loadings = frs._expos
@@ -666,7 +668,7 @@ def cmd_optimize(args):
 
     # Try to load cached names first
     if Path(names_cache_file).exists():
-        print(f"\n📂 Loading cached factor names from {names_cache_file}")
+        print(f"\n Loading cached factor names from {names_cache_file}")
         with open(names_cache_file, 'r') as f:
             factor_names = json.load(f)
 
@@ -674,10 +676,11 @@ def cmd_optimize(args):
     factors_needing_names = [f for f in factor_loadings.columns if f not in factor_names]
 
     if factors_needing_names and validate_api_key():
-        print(f"\n🏷️  Generating names for {len(factors_needing_names)} factors...")
+        print(f"\n  Generating names for {len(factors_needing_names)} factors...")
 
-        # Get fundamentals for naming context
-        fundamentals = frs.get_fundamentals() if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
+        # Get fundamentals for naming context (pass tickers from loadings index)
+        tickers = list(factor_loadings.index)
+        fundamentals = frs.get_fundamentals(tickers) if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
 
         # Generate names with full enrichment
         new_names = batch_name_factors(
@@ -695,7 +698,7 @@ def cmd_optimize(args):
         # Cache names
         with open(names_cache_file, 'w') as f:
             json.dump(factor_names, f, indent=2)
-        print(f"   💾 Cached names to {names_cache_file}")
+        print(f"    Cached names to {names_cache_file}")
 
         # Also save to CSV if requested
         if args.name_factors:
@@ -704,20 +707,20 @@ def cmd_optimize(args):
                 'name': list(factor_names.values())
             })
             names_df.to_csv(args.factor_names_output, index=False)
-            print(f"   💾 Factor names saved to: {args.factor_names_output}")
+            print(f"    Factor names saved to: {args.factor_names_output}")
     elif factors_needing_names:
-        print("\n⚠️  OpenAI API key not available - using factor IDs as names")
+        print("\n  OpenAI API key not available - using factor IDs as names")
         for f in factors_needing_names:
             factor_names[f] = f
 
     # Display factor names
     if factor_names:
-        print("\n📋 Factor Names:")
+        print("\n Factor Names:")
         for factor, name in sorted(factor_names.items()):
             print(f"   {factor}: {name}")
     
     if args.walk_forward:
-        print(f"\n🔄 Running walk-forward optimization...")
+        print(f"\n Running walk-forward optimization...")
         print(f"   Training window: {args.train_window} days")
         print(f"   Test window: {args.test_window} days")
         print(f"   Methods: {', '.join(args.methods)}")
@@ -731,7 +734,7 @@ def cmd_optimize(args):
             verbose=True
         )
         
-        print(f"\n📈 Walk-Forward Results Summary:")
+        print(f"\n Walk-Forward Results Summary:")
         print(f"   Number of periods: {len(results)}")
         print(f"   Average train Sharpe: {results['train_sharpe'].mean():.2f}")
         print(f"   Average test Sharpe: {results['test_sharpe'].mean():.2f}")
@@ -748,10 +751,10 @@ def cmd_optimize(args):
                     json.dump(results_dict, f, indent=2, default=str)
             else:
                 results.to_json(args.output, orient='records', date_format='iso')
-            print(f"\n💾 Results saved to: {args.output}")
+            print(f"\n Results saved to: {args.output}")
     
     else:
-        print(f"\n⚙️  Running single-period optimization...")
+        print(f"\n  Running single-period optimization...")
         print(f"   Lookback: {args.lookback} days")
         print(f"   Methods: {', '.join(args.methods)}")
         print(f"   Technique: {args.technique}")
@@ -766,20 +769,20 @@ def cmd_optimize(args):
         print("OPTIMIZATION RESULTS")
         print("=" * 70)
         
-        print(f"\n📊 Performance Metrics:")
+        print(f"\n Performance Metrics:")
         print(f"   Sharpe Ratio:         {result.sharpe_ratio:.2f}")
         print(f"   Annualized Return:    {result.annualized_return:.2%}")
         print(f"   Annualized Volatility:{result.annualized_volatility:.2%}")
         
-        print(f"\n🔧 Optimal Method Blend:")
+        print(f"\n Optimal Method Blend:")
         for method, weight in sorted(result.method_allocation.items(), key=lambda x: -x[1]):
             if weight > 0.01:
-                bar = "█" * int(weight * 50)
+                bar = "" * int(weight * 50)
                 print(f"   {method:<20} {weight:>6.1%} {bar}")
         
-        print(f"\n📈 Optimal Factor Weights:")
+        print(f"\n Optimal Factor Weights:")
         for factor, weight in sorted(result.optimal_weights.items(), key=lambda x: -x[1]):
-            bar = "█" * int(weight * 50)
+            bar = "" * int(weight * 50)
             display_name = factor_names.get(factor, factor)
             print(f"   {display_name:<30} {weight:>6.1%} {bar}")
         
@@ -793,7 +796,7 @@ def cmd_optimize(args):
             if factor_names:
                 weights_df['factor_name'] = weights_df['factor'].map(factor_names)
             weights_df.to_csv(args.export_weights, index=False)
-            print(f"\n💾 Weights exported to: {args.export_weights}")
+            print(f"\n Weights exported to: {args.export_weights}")
         
         # Save full results
         if args.output:
@@ -812,7 +815,7 @@ def cmd_optimize(args):
                 output_data['factor_names'] = factor_names
             with open(args.output, 'w') as f:
                 json.dump(output_data, f, indent=2)
-            print(f"💾 Full results saved to: {args.output}")
+            print(f" Full results saved to: {args.output}")
 
 
 def cmd_basket(args):
@@ -821,22 +824,22 @@ def cmd_basket(args):
     import pickle
 
     print("=" * 70)
-    print("📊 GENERATING TRADEABLE BASKET")
+    print(" GENERATING TRADEABLE BASKET")
     print("=" * 70)
 
     # Load optimization results
-    print(f"\n📂 Loading optimization results from: {args.results}")
+    print(f"\n Loading optimization results from: {args.results}")
     with open(args.results, 'r') as f:
         opt_results = json.load(f)
 
     # Load factor loadings from cache
     cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.factor_method}.pkl"
     if not Path(cache_file).exists():
-        print(f"❌ Cache file not found: {cache_file}")
+        print(f" Cache file not found: {cache_file}")
         print("   Run optimization first to generate factor loadings.")
         sys.exit(1)
 
-    print(f"📂 Loading factor loadings from: {cache_file}")
+    print(f" Loading factor loadings from: {cache_file}")
     with open(cache_file, 'rb') as f:
         _, factor_loadings = pickle.load(f)
 
@@ -855,7 +858,7 @@ def cmd_basket(args):
     # Get factor weights
     if isinstance(opt_results, list):
         # Walk-forward results - average factor weights across all periods
-        print("📊 Averaging factor weights across all walk-forward periods...")
+        print(" Averaging factor weights across all walk-forward periods...")
         import pandas as pd
         all_weights = [period['factor_weights'] for period in opt_results]
         weights_df = pd.DataFrame(all_weights)
@@ -864,17 +867,17 @@ def cmd_basket(args):
     elif 'optimal_weights' in opt_results:
         factor_weights = opt_results['optimal_weights']
     else:
-        print("❌ No factor weights found in results file.")
+        print(" No factor weights found in results file.")
         print("   Expected 'optimal_weights' key or a list of walk-forward results.")
         sys.exit(1)
 
-    print(f"\n📈 Optimal Factor Weights:")
+    print(f"\n Optimal Factor Weights:")
     for f, w in sorted(factor_weights.items(), key=lambda x: -x[1]):
         display_name = factor_names.get(f, f)
         print(f"   {display_name:<30}: {w:.2%}")
     
     # Calculate composite stock scores
-    print("\n🔍 Calculating target stock exposures...")
+    print("\n Calculating target stock exposures...")
     composite_score = pd.Series(0.0, index=factor_loadings.index)
     
     for factor, weight in factor_weights.items():
@@ -891,7 +894,7 @@ def cmd_basket(args):
     longs = composite_score.head(n_long)
     shorts = composite_score.tail(n_short)
     
-    print(f"\n📊 Basket Composition:")
+    print(f"\n Basket Composition:")
     print(f"   Universe: {n_stocks} stocks")
     print(f"   Longs: {n_long} stocks (top {args.long_pct:.0%})")
     print(f"   Shorts: {n_short} stocks (bottom {args.short_pct:.0%})")
@@ -913,14 +916,14 @@ def cmd_basket(args):
     positions['position_dollars'] = positions['target_weight'] * args.capital
     
     # Display results
-    print(f"\n📈 TOP {n_long} LONG POSITIONS:")
+    print(f"\n TOP {n_long} LONG POSITIONS:")
     print("-" * 70)
     print(f"{'Ticker':<10} {'Score':>10} {'Weight':>10} {'Position ($)':>15}")
     print("-" * 70)
     for _, row in positions[positions['side'] == 'LONG'].head(10).iterrows():
         print(f"{row['ticker']:<10} {row['composite_score']:>10.4f} {row['target_weight']:>9.2%} ${row['position_dollars']:>14,.0f}")
     
-    print(f"\n📉 TOP {n_short} SHORT POSITIONS:")
+    print(f"\n TOP {n_short} SHORT POSITIONS:")
     print("-" * 70)
     print(f"{'Ticker':<10} {'Score':>10} {'Weight':>10} {'Position ($)':>15}")
     print("-" * 70)
@@ -930,13 +933,13 @@ def cmd_basket(args):
     # Export
     if args.output:
         positions.to_csv(args.output, index=False)
-        print(f"\n💾 Basket exported to: {args.output}")
+        print(f"\n Basket exported to: {args.output}")
     
     # Summary stats
     gross_exposure = positions['target_weight'].abs().sum()
     net_exposure = positions['target_weight'].sum()
     
-    print(f"\n📊 Portfolio Summary:")
+    print(f"\n Portfolio Summary:")
     print(f"   Gross Exposure: {gross_exposure:.1%}")
     print(f"   Net Exposure: {net_exposure:.1%}")
     print(f"   Number of Positions: {len(positions)}")

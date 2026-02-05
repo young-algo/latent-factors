@@ -95,11 +95,11 @@ def simulate_factor_trends(factor_names, periods=[7, 14, 30]):
 
 def analyze_factor_trends():
     """Comprehensive factor trends analysis."""
-    print("📈 Factor Trends Analysis")
+    print(" Factor Trends Analysis")
     print("=" * 50)
     
     config, factor_names = load_config_and_names()
-    print(f"✅ Analyzing {len(factor_names)} factors from {config['symbols']} ({config['method']})")
+    print(f" Analyzing {len(factor_names)} factors from {config['symbols']} ({config['method']})")
     
     # Generate multi-period performance
     trends = simulate_factor_trends(factor_names)
@@ -107,12 +107,12 @@ def analyze_factor_trends():
     # Categorize factors
     categories = categorize_factors(factor_names)
     
-    print(f"\n🎯 FACTOR CATEGORIES:")
+    print(f"\n FACTOR CATEGORIES:")
     for category, factors in categories.items():
         print(f"   {category}: {len(factors)} factors")
     
     # Multi-period performance comparison
-    print(f"\n📊 MULTI-PERIOD PERFORMANCE COMPARISON:")
+    print(f"\n MULTI-PERIOD PERFORMANCE COMPARISON:")
     print("-" * 80)
     print(f"{'Factor':<8} {'Name':<30} {'7D (bps)':<10} {'14D (bps)':<11} {'30D (bps)':<10} {'Trend':<6}")
     print("-" * 80)
@@ -132,13 +132,13 @@ def analyze_factor_trends():
         
         # Determine trend
         if perf_30d > perf_14d > perf_7d:
-            trend = "⬆️ UP"
+            trend = " UP"
         elif perf_30d < perf_14d < perf_7d:
-            trend = "⬇️ DOWN"
+            trend = " DOWN"
         elif abs(perf_14d - perf_7d) < 10 and abs(perf_30d - perf_14d) < 15:
-            trend = "➡️ FLAT"
+            trend = " FLAT"
         else:
-            trend = "🔄 MIX"
+            trend = " MIX"
         
         performance_data.append({
             'Factor': factor,
@@ -153,7 +153,7 @@ def analyze_factor_trends():
         print(f"{factor:<8} {factor_name:<30} {perf_7d:>+7.0f}    {perf_14d:>+8.0f}     {perf_30d:>+7.0f}   {trend}")
     
     # Category performance
-    print(f"\n🏆 CATEGORY PERFORMANCE (14-Day Returns):")
+    print(f"\n CATEGORY PERFORMANCE (14-Day Returns):")
     print("-" * 50)
     category_performance = {}
     
@@ -172,7 +172,7 @@ def analyze_factor_trends():
     momentum_df = pd.DataFrame(performance_data)
     momentum_df = momentum_df.sort_values('Momentum', ascending=False)
     
-    print(f"\n🚀 MOMENTUM LEADERS (Accelerating Performance):")
+    print(f"\n MOMENTUM LEADERS (Accelerating Performance):")
     print("-" * 60)
     print(f"{'Factor':<8} {'Name':<35} {'Momentum':<10}")
     print("-" * 60)
@@ -180,33 +180,33 @@ def analyze_factor_trends():
     for _, row in momentum_df.head(5).iterrows():
         print(f"{row['Factor']:<8} {row['Name']:<35} {row['Momentum']:>+6.0f} bps")
     
-    print(f"\n📉 MOMENTUM LAGGARDS (Decelerating Performance):")
+    print(f"\n MOMENTUM LAGGARDS (Decelerating Performance):")
     print("-" * 60)
     for _, row in momentum_df.tail(5).iloc[::-1].iterrows():
         print(f"{row['Factor']:<8} {row['Name']:<35} {row['Momentum']:>+6.0f} bps")
     
     # Key insights
-    print(f"\n💡 KEY INSIGHTS:")
+    print(f"\n KEY INSIGHTS:")
     best_category = sorted_categories[0]
     worst_category = sorted_categories[-1]
-    print(f"   🥇 Best Category: {best_category[0]} ({best_category[1]:+.0f} bps avg)")
-    print(f"   🥉 Worst Category: {worst_category[0]} ({worst_category[1]:+.0f} bps avg)")
+    print(f"    Best Category: {best_category[0]} ({best_category[1]:+.0f} bps avg)")
+    print(f"    Worst Category: {worst_category[0]} ({worst_category[1]:+.0f} bps avg)")
     
     up_trends = sum(1 for d in performance_data if "UP" in d['Trend'])
     down_trends = sum(1 for d in performance_data if "DOWN" in d['Trend'])
-    print(f"   📈 Uptrending Factors: {up_trends}/{len(performance_data)}")
-    print(f"   📉 Downtrending Factors: {down_trends}/{len(performance_data)}")
+    print(f"    Uptrending Factors: {up_trends}/{len(performance_data)}")
+    print(f"    Downtrending Factors: {down_trends}/{len(performance_data)}")
     
     # Save detailed analysis
     momentum_df.to_csv('factor_trends_analysis.csv', index=False)
-    print(f"\n💾 Detailed trends saved to 'factor_trends_analysis.csv'")
+    print(f"\n Detailed trends saved to 'factor_trends_analysis.csv'")
 
 def main():
     """Main function."""
     try:
         analyze_factor_trends()
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f" Error: {e}")
 
 if __name__ == "__main__":
     main()

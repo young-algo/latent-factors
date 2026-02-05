@@ -341,16 +341,16 @@ def run_critical_qa_checks():
         tickers = universe_df['ticker'].tolist()
         
         if 'LEH' in tickers:
-            print("✓ PASS: LEH found in universe")
+            print(" PASS: LEH found in universe")
             print(f"  Universe size: {len(tickers)} stocks")
             print(f"  LEH rank by dollar volume: {tickers.index('LEH') + 1}")
         else:
-            print("✗ FAIL: LEH NOT FOUND in universe")
+            print(" FAIL: LEH NOT FOUND in universe")
             print(f"  Universe size: {len(tickers)} stocks")
             print("  This indicates survivorship bias!")
             all_passed = False
     except Exception as e:
-        print(f"✗ ERROR: {e}")
+        print(f" ERROR: {e}")
         all_passed = False
     
     print()
@@ -372,25 +372,25 @@ def run_critical_qa_checks():
         tickers = universe_df['ticker'].tolist()
         
         if 'SIVB' in tickers:
-            print("✓ PASS: SIVB found in universe")
+            print(" PASS: SIVB found in universe")
             print(f"  Universe size: {len(tickers)} stocks")
             print(f"  SIVB rank by dollar volume: {tickers.index('SIVB') + 1}")
         else:
-            print("✗ FAIL: SIVB NOT FOUND in universe")
+            print(" FAIL: SIVB NOT FOUND in universe")
             print(f"  Universe size: {len(tickers)} stocks")
             print("  This indicates survivorship bias!")
             all_passed = False
     except Exception as e:
-        print(f"✗ ERROR: {e}")
+        print(f" ERROR: {e}")
         all_passed = False
     
     print()
     print("=" * 70)
     if all_passed:
-        print("ALL CRITICAL QA TESTS PASSED ✓")
+        print("ALL CRITICAL QA TESTS PASSED ")
         print("System is ready for backtesting without survivorship bias.")
     else:
-        print("CRITICAL QA TESTS FAILED ✗")
+        print("CRITICAL QA TESTS FAILED ")
         print("DO NOT deploy to live capital until these tests pass!")
         print()
         print("The system is still suffering from survivorship bias.")

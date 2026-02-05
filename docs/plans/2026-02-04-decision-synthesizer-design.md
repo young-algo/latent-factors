@@ -29,9 +29,9 @@ A **Decision Synthesizer** module that sits above existing signal generators and
 ### 1. Market State Summary
 
 ```
-═══════════════════════════════════════════════════════
+
 MORNING BRIEFING - {date}
-═══════════════════════════════════════════════════════
+
 
 REGIME: {regime_name} ({confidence}% confidence, {days} days in current state)
 TREND:  {trend_description}
@@ -97,40 +97,40 @@ When signals disagree:
 ### OPPORTUNISTIC Actions
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ ACTION: {action_description}                                    │
-├─────────────────────────────────────────────────────────────────┤
-│ Conviction: {HIGH|MEDIUM|LOW} ({score}/10)                      │
-│                                                                 │
-│ WHY:                                                            │
-│  • Regime: {regime_rationale}                                   │
-│  • Signal: {primary_signal_description}                         │
-│  • Confirmation: {confirming_signals}                           │
-│                                                                 │
-│ CONFLICTS: {conflicts_or_none}                                  │
-│                                                                 │
-│ SUGGESTED EXPRESSION:                                           │
-│  • Simple: {etf_trade}                                          │
-│  • Targeted: {stock_list_with_sizes}                            │
-│                                                                 │
-│ SIZING LOGIC: {sizing_rationale}                                │
-│ STOP CONSIDERATION: {exit_trigger}                              │
-└─────────────────────────────────────────────────────────────────┘
+
+ ACTION: {action_description}                                    
+
+ Conviction: {HIGH|MEDIUM|LOW} ({score}/10)                      
+                                                                 
+ WHY:                                                            
+  • Regime: {regime_rationale}                                   
+  • Signal: {primary_signal_description}                         
+  • Confirmation: {confirming_signals}                           
+                                                                 
+ CONFLICTS: {conflicts_or_none}                                  
+                                                                 
+ SUGGESTED EXPRESSION:                                           
+  • Simple: {etf_trade}                                          
+  • Targeted: {stock_list_with_sizes}                            
+                                                                 
+ SIZING LOGIC: {sizing_rationale}                                
+ STOP CONSIDERATION: {exit_trigger}                              
+
 ```
 
 ### WATCH Items
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ WATCH: {observation_title}                                      │
-├─────────────────────────────────────────────────────────────────┤
-│ Conviction: LOW ({score}/10) - not actionable yet               │
-│                                                                 │
-│ OBSERVATION:                                                    │
-│  • {observation_details}                                        │
-│                                                                 │
-│ TRIGGER TO UPGRADE: {conditions_for_actionability}              │
-└─────────────────────────────────────────────────────────────────┘
+
+ WATCH: {observation_title}                                      
+
+ Conviction: LOW ({score}/10) - not actionable yet               
+                                                                 
+ OBSERVATION:                                                    
+  • {observation_details}                                        
+                                                                 
+ TRIGGER TO UPGRADE: {conditions_for_actionability}              
+
 ```
 
 ---

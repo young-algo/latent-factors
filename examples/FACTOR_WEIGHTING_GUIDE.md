@@ -15,7 +15,7 @@ This guide explains optimal methods for determining factor weights in cross-sect
 
 ## Optimal Weighting Methods
 
-### 1. Sharpe Ratio Weighting ⭐ **RECOMMENDED BASELINE**
+### 1. Sharpe Ratio Weighting  **RECOMMENDED BASELINE**
 
 **What it does:** Weights factors by their risk-adjusted returns.
 
@@ -31,13 +31,13 @@ w_i = max(0, Sharpe_i - min_threshold) / Σmax(0, Sharpe_j - min_threshold)
 - Avoiding factors with poor risk-adjusted performance
 
 **Pros:**
-- ✅ Simple and interpretable
-- ✅ Penalizes volatile underperformers
-- ✅ Can require positive Sharpe (min_threshold)
+-  Simple and interpretable
+-  Penalizes volatile underperformers
+-  Can require positive Sharpe (min_threshold)
 
 **Cons:**
-- ❌ Ignores correlation between factors
-- ❌ Assumes past Sharpe predicts future
+-  Ignores correlation between factors
+-  Assumes past Sharpe predicts future
 
 **Usage:**
 ```python
@@ -46,7 +46,7 @@ weights = weighter.sharpe_weights(lookback=63, min_sharpe=0.5)
 
 ---
 
-### 2. Information Coefficient (IC) Weighting ⭐ **BEST FOR SELECTION**
+### 2. Information Coefficient (IC) Weighting  **BEST FOR SELECTION**
 
 **What it does:** Weights factors by their predictive power (correlation with forward returns).
 
@@ -62,13 +62,13 @@ w_i = |IC_i| / Σ|IC_j|
 - Factor timing
 
 **Pros:**
-- ✅ Directly measures predictive power
-- ✅ Robust to outliers (Spearman rank)
-- ✅ Data-driven
+-  Directly measures predictive power
+-  Robust to outliers (Spearman rank)
+-  Data-driven
 
 **Cons:**
-- ❌ Requires forward returns (can't use for pure historical analysis)
-- ❌ IC can be unstable over time
+-  Requires forward returns (can't use for pure historical analysis)
+-  IC can be unstable over time
 
 **Usage:**
 ```python
@@ -78,7 +78,7 @@ weights = weighter.ic_weights(forward_returns, method='spearman')
 
 ---
 
-### 3. Factor Momentum Weighting ⭐ **BEST FOR TACTICAL**
+### 3. Factor Momentum Weighting  **BEST FOR TACTICAL**
 
 **What it does:** Overweights factors that have been performing well recently.
 
@@ -94,14 +94,14 @@ w_i = max(0, momentum_i) / Σmax(0, momentum_j)
 - Adapting to regime changes
 
 **Pros:**
-- ✅ Dynamic and adaptive
-- ✅ Can capture factor trends
-- ✅ Multiple calculation methods (absolute, relative, vol-adjusted)
+-  Dynamic and adaptive
+-  Can capture factor trends
+-  Multiple calculation methods (absolute, relative, vol-adjusted)
 
 **Cons:**
-- ❌ Can chase performance
-- ❌ Requires frequent rebalancing
-- ❌ May increase turnover
+-  Can chase performance
+-  Requires frequent rebalancing
+-  May increase turnover
 
 **Usage:**
 ```python
@@ -110,7 +110,7 @@ weights = weighter.momentum_weights(lookback=21, method='vol_adjusted')
 
 ---
 
-### 4. Risk Parity Weighting ⭐ **BEST FOR RISK MANAGEMENT**
+### 4. Risk Parity Weighting  **BEST FOR RISK MANAGEMENT**
 
 **What it does:** Each factor contributes equally to portfolio risk.
 
@@ -126,14 +126,14 @@ Where Σ is the factor covariance matrix
 - Balanced risk contribution
 
 **Pros:**
-- ✅ Equal risk contribution
-- ✅ Penalizes high-volatility factors
-- ✅ Accounts for correlations
+-  Equal risk contribution
+-  Penalizes high-volatility factors
+-  Accounts for correlations
 
 **Cons:**
-- ❌ Requires covariance estimation
-- ❌ Complex optimization
-- ❌ May overweight low-return factors
+-  Requires covariance estimation
+-  Complex optimization
+-  May overweight low-return factors
 
 **Usage:**
 ```python
@@ -158,14 +158,14 @@ s.t.: Σw_i = 1, w_i ≥ 0
 - Defensive positioning
 
 **Pros:**
-- ✅ Lowest possible portfolio volatility
-- ✅ Analytically optimal
-- ✅ Works well with risk parity
+-  Lowest possible portfolio volatility
+-  Analytically optimal
+-  Works well with risk parity
 
 **Cons:**
-- ❌ Ignores returns completely
-- ❌ May concentrate in few low-vol factors
-- ❌ Poor when low-vol underperforms
+-  Ignores returns completely
+-  May concentrate in few low-vol factors
+-  Poor when low-vol underperforms
 
 **Usage:**
 ```python
@@ -190,14 +190,14 @@ maximize DR
 - Reducing concentration risk
 
 **Pros:**
-- ✅ Maximizes diversification
-- ✅ Accounts for correlations
-- ✅ Better than equal weight for correlated factors
+-  Maximizes diversification
+-  Accounts for correlations
+-  Better than equal weight for correlated factors
 
 **Cons:**
-- ❌ Complex optimization
-- ❌ May not align with return objectives
-- ❌ Requires reliable covariance estimates
+-  Complex optimization
+-  May not align with return objectives
+-  Requires reliable covariance estimates
 
 **Usage:**
 ```python
@@ -222,14 +222,14 @@ Weight_i = sum of squared loadings on significant PCs
 - Statistical factor importance
 
 **Pros:**
-- ✅ Data-driven importance
-- ✅ Handles collinearity
-- ✅ Dimensionality reduction
+-  Data-driven importance
+-  Handles collinearity
+-  Dimensionality reduction
 
 **Cons:**
-- ❌ May not align with returns
-- ❌ PCA factors not interpretable
-- ❌ Sensitive to scaling
+-  May not align with returns
+-  PCA factors not interpretable
+-  Sensitive to scaling
 
 **Usage:**
 ```python
@@ -238,7 +238,7 @@ weights = weighter.pca_weights(variance_threshold=0.95)
 
 ---
 
-### 8. Blended Weighting ⭐ **RECOMMENDED FOR PRODUCTION**
+### 8. Blended Weighting  **RECOMMENDED FOR PRODUCTION**
 
 **What it does:** Combines multiple methods using a weighted average.
 
@@ -253,14 +253,14 @@ w_blend = Σ(method_weight_i × w_method_i)
 - Production portfolios
 
 **Pros:**
-- ✅ Combines benefits of multiple methods
-- ✅ More stable than single method
-- ✅ Customizable to objectives
+-  Combines benefits of multiple methods
+-  More stable than single method
+-  Customizable to objectives
 
 **Cons:**
-- ❌ More complex
-- ❌ Requires tuning blend weights
-- ❌ May dilute strong signals
+-  More complex
+-  Requires tuning blend weights
+-  May dilute strong signals
 
 **Usage:**
 ```python
@@ -281,15 +281,15 @@ weights = weighter.blend_weights(
 
 | Method | Considers Returns | Considers Risk | Considers Correlation | Dynamic | Complexity |
 |--------|-------------------|----------------|------------------------|---------|------------|
-| Equal | ❌ | ❌ | ❌ | ❌ | Low |
-| Sharpe | ✅ | ✅ | ❌ | ❌ | Low |
-| IC | ✅ | ❌ | ❌ | ❌ | Low |
-| Momentum | ✅ | ❌ | ❌ | ✅ | Low |
-| Risk Parity | ❌ | ✅ | ✅ | ❌ | High |
-| Min Variance | ❌ | ✅ | ✅ | ❌ | Medium |
-| Max Diversification | ❌ | ✅ | ✅ | ❌ | High |
-| PCA | ❌ | ❌ | ✅ | ❌ | Medium |
-| **Blended** | ✅ | ✅ | ✅ | ✅ | Medium |
+| Equal |  |  |  |  | Low |
+| Sharpe |  |  |  |  | Low |
+| IC |  |  |  |  | Low |
+| Momentum |  |  |  |  | Low |
+| Risk Parity |  |  |  |  | High |
+| Min Variance |  |  |  |  | Medium |
+| Max Diversification |  |  |  |  | High |
+| PCA |  |  |  |  | Medium |
+| **Blended** |  |  |  |  | Medium |
 
 ---
 

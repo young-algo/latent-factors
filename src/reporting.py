@@ -27,11 +27,11 @@ def generate_daily_report(output_path: str = "daily_report.html"):
             with open("factor_names.json", "r") as f:
                 names = json.load(f)
     except FileNotFoundError:
-        print("❌ Data not found. Please run discovery first.")
+        print(" Data not found. Please run discovery first.")
         return
 
     if returns.empty:
-        print("❌ No return data available.")
+        print(" No return data available.")
         return
 
     last_date = returns.index[-1]
@@ -147,7 +147,7 @@ def generate_detailed_markdown_report(output_path: str = "detailed_report.md"):
             
         conn = sqlite3.connect(db_path)
     except Exception as e:
-        print(f"❌ Error loading data: {e}")
+        print(f" Error loading data: {e}")
         return
 
     def get_fundamentals(ticker):
@@ -207,7 +207,7 @@ def generate_detailed_markdown_report(output_path: str = "detailed_report.md"):
         f.write("\n".join(report))
     
     conn.close()
-    print(f"✅ Detailed report generated: {output_path}")
+    print(f" Detailed report generated: {output_path}")
 
 def generate_signal_report(
     factor_returns: pd.DataFrame,
@@ -272,10 +272,10 @@ def generate_signal_report(
     </head>
     <body>
         <div class="container">
-            <h1>📊 Trading Signal Report</h1>
+            <h1> Trading Signal Report</h1>
             <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
 
-            <h2>🎯 Market Regime</h2>
+            <h2> Market Regime</h2>
             <div class="metric-box">
                 <div class="metric-value">{current_regime.regime.value.replace('_', ' ').title()}</div>
                 <div class="metric-label">Current Regime</div>
@@ -290,7 +290,7 @@ def generate_signal_report(
             </div>
             <p><strong>Description:</strong> {current_regime.description}</p>
 
-            <h2>🚨 Extreme Value Alerts ({len(extreme_alerts)} active)</h2>
+            <h2> Extreme Value Alerts ({len(extreme_alerts)} active)</h2>
     """
 
         if extreme_alerts:
@@ -320,7 +320,7 @@ def generate_signal_report(
             html_content += '<p class="alert">No extreme value alerts at this time.</p>'
 
         html_content += f"""
-            <h2>📈 Factor Signals</h2>
+            <h2> Factor Signals</h2>
             <table>
                 <tr>
                     <th>Factor</th>
@@ -355,7 +355,7 @@ def generate_signal_report(
         html_content += "</table>"
 
         html_content += f"""
-            <h2>🔥 Cross-Sectional Rankings</h2>
+            <h2> Cross-Sectional Rankings</h2>
             <h3>Top 10 Long Candidates</h3>
             <table>
                 <tr>
@@ -406,7 +406,7 @@ def generate_signal_report(
         html_content += """
             </table>
 
-            <h2>📊 Regime Statistics</h2>
+            <h2> Regime Statistics</h2>
             <table>
                 <tr>
                     <th>Regime</th>
@@ -440,10 +440,10 @@ def generate_signal_report(
         with open(output_path, "w") as f:
             f.write(html_content)
 
-        print(f"✅ Signal report generated: {output_path}")
+        print(f" Signal report generated: {output_path}")
 
     except Exception as e:
-        print(f"❌ Error generating signal report: {e}")
+        print(f" Error generating signal report: {e}")
 
 
 def export_signals_to_csv(
@@ -515,10 +515,10 @@ def export_signals_to_csv(
         # Export to CSV
         df = pd.DataFrame(all_signals)
         df.to_csv(output_path, index=False)
-        print(f"✅ Signals exported to: {output_path}")
+        print(f" Signals exported to: {output_path}")
 
     except Exception as e:
-        print(f"❌ Error exporting signals: {e}")
+        print(f" Error exporting signals: {e}")
 
 
 def create_signal_alert_email(
@@ -620,6 +620,6 @@ if __name__ == "__main__":
             loadings = pd.read_csv("factor_loadings.csv", index_col=0)
             generate_signal_report(returns, loadings)
         except FileNotFoundError:
-            print("❌ Data not found. Please run discovery first.")
+            print(" Data not found. Please run discovery first.")
     else:
         generate_daily_report()

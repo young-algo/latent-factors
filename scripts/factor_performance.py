@@ -55,7 +55,7 @@ def regenerate_factor_returns():
     symbols_str = config['symbols']
     symbols_list = [s.strip().upper() for s in symbols_str.split(',')]
     
-    print(f"🔄 Regenerating factor returns for {config['method']} analysis...")
+    print(f" Regenerating factor returns for {config['method']} analysis...")
     print(f"   Universe: {symbols_str}")
     print(f"   Method: {config['method']}")
     print(f"   Factors: {config['k']}")
@@ -74,7 +74,7 @@ def regenerate_factor_returns():
                                                  n_components=config['k'],
                                                  method=StatMethod[config['method']])
     
-    print(f"✅ Generated factor returns: {factor_ret.shape}")
+    print(f" Generated factor returns: {factor_ret.shape}")
     return factor_ret
 
 def analyze_factor_performance(period_days=14):
@@ -86,29 +86,29 @@ def analyze_factor_performance(period_days=14):
     period_days : int
         Number of days to analyze (default: 14 for two weeks)
     """
-    print(f"📊 Factor Performance Analysis: Last {period_days} Days")
+    print(f" Factor Performance Analysis: Last {period_days} Days")
     print("=" * 60)
     
     # Load factor names
     try:
         factor_names = load_factor_names()
-        print(f"✅ Loaded {len(factor_names)} factor names")
+        print(f" Loaded {len(factor_names)} factor names")
     except Exception as e:
-        print(f"❌ Error loading factor names: {e}")
+        print(f" Error loading factor names: {e}")
         return
     
     # Generate factor returns
     try:
         factor_returns = regenerate_factor_returns()
     except Exception as e:
-        print(f"❌ Error generating factor returns: {e}")
+        print(f" Error generating factor returns: {e}")
         return
     
     # Calculate recent period performance
     end_date = factor_returns.index.max()
     start_date = end_date - timedelta(days=period_days)
     
-    print(f"\n📅 Analysis Period:")
+    print(f"\n Analysis Period:")
     print(f"   Start: {start_date.strftime('%Y-%m-%d')}")
     print(f"   End: {end_date.strftime('%Y-%m-%d')}")
     print(f"   Duration: {period_days} days")
@@ -117,10 +117,10 @@ def analyze_factor_performance(period_days=14):
     recent_returns = factor_returns[factor_returns.index >= start_date]
     
     if len(recent_returns) == 0:
-        print(f"❌ No data available for the last {period_days} days")
+        print(f" No data available for the last {period_days} days")
         return
     
-    print(f"✅ Found {len(recent_returns)} days of recent data")
+    print(f" Found {len(recent_returns)} days of recent data")
     
     # Calculate performance metrics
     total_returns = recent_returns.sum() * 100  # Convert to basis points
@@ -139,7 +139,7 @@ def analyze_factor_performance(period_days=14):
     # Sort by performance
     performance_summary = performance_summary.sort_values('Return_bps', ascending=False)
     
-    print(f"\n🏆 BEST PERFORMING FACTORS (Last {period_days} Days):")
+    print(f"\n BEST PERFORMING FACTORS (Last {period_days} Days):")
     print("-" * 75)
     print(f"{'Rank':<4} {'Factor':<8} {'Return (bps)':<12} {'Vol (%)':<8} {'Name':<40}")
     print("-" * 75)
@@ -147,7 +147,7 @@ def analyze_factor_performance(period_days=14):
     for i, (_, row) in enumerate(performance_summary.head(5).iterrows(), 1):
         print(f"{i:<4} {row['Factor']:<8} {row['Return_bps']:>+8.0f}      {row['Volatility_%']:>5.1f}    {row['Name']:<40}")
     
-    print(f"\n📉 WORST PERFORMING FACTORS (Last {period_days} Days):")
+    print(f"\n WORST PERFORMING FACTORS (Last {period_days} Days):")
     print("-" * 75)
     print(f"{'Rank':<4} {'Factor':<8} {'Return (bps)':<12} {'Vol (%)':<8} {'Name':<40}")
     print("-" * 75)
@@ -158,7 +158,7 @@ def analyze_factor_performance(period_days=14):
     # Risk-adjusted performance (Sharpe ratio)
     sharpe_sorted = performance_summary.sort_values('Sharpe', ascending=False)
     
-    print(f"\n⚖️ BEST RISK-ADJUSTED PERFORMANCE (Sharpe Ratio):")
+    print(f"\n BEST RISK-ADJUSTED PERFORMANCE (Sharpe Ratio):")
     print("-" * 75)
     print(f"{'Rank':<4} {'Factor':<8} {'Sharpe':<8} {'Return (bps)':<12} {'Name':<40}")
     print("-" * 75)
@@ -167,7 +167,7 @@ def analyze_factor_performance(period_days=14):
         print(f"{i:<4} {row['Factor']:<8} {row['Sharpe']:>5.2f}    {row['Return_bps']:>+8.0f}      {row['Name']:<40}")
     
     # Summary statistics
-    print(f"\n📈 SUMMARY STATISTICS (Last {period_days} Days):")
+    print(f"\n SUMMARY STATISTICS (Last {period_days} Days):")
     print(f"   Best Factor Return: {performance_summary['Return_bps'].max():+.0f} bps ({performance_summary.iloc[0]['Factor']})")
     print(f"   Worst Factor Return: {performance_summary['Return_bps'].min():+.0f} bps ({performance_summary.iloc[-1]['Factor']})")
     print(f"   Average Return: {performance_summary['Return_bps'].mean():+.1f} bps")
@@ -177,7 +177,7 @@ def analyze_factor_performance(period_days=14):
     
     # Save detailed results
     performance_summary.to_csv(f'factor_performance_{period_days}d.csv', index=False)
-    print(f"\n💾 Detailed results saved to 'factor_performance_{period_days}d.csv'")
+    print(f"\n Detailed results saved to 'factor_performance_{period_days}d.csv'")
 
 def main():
     """Main function to run factor performance analysis."""
@@ -191,7 +191,7 @@ def main():
     try:
         analyze_factor_performance(period_days=args.days)
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f" Error: {e}")
 
 if __name__ == "__main__":
     main()

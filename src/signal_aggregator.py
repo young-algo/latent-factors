@@ -34,10 +34,10 @@ Signal Combination Methods
 Architecture
 ------------
 ```
-Momentum Signals ──┐
-Extreme Alerts ────┼──> SignalAggregator ──> Consensus Score ──> Trade Rec
-Cross-Sectional ───┤         ↓                    ↓
-Regime Signals ────┘   Historical Weights    Confidence 0-100
+Momentum Signals 
+Extreme Alerts > SignalAggregator > Consensus Score > Trade Rec
+Cross-Sectional          ↓                    ↓
+Regime Signals    Historical Weights    Confidence 0-100
 ```
 
 Dependencies
@@ -844,7 +844,7 @@ class SignalAggregator:
         ]
 
         if strong_signals:
-            lines.append("🔴 STRONG SIGNALS:")
+            lines.append(" STRONG SIGNALS:")
             for sig in strong_signals:
                 entity = sig.ticker or sig.factor or "Market"
                 lines.append(
@@ -874,7 +874,7 @@ class SignalAggregator:
         # Regime information
         if self.regime_detector is not None:
             regime = self.regime_detector.detect_current_regime()
-            lines.append("📊 CURRENT REGIME:")
+            lines.append(" CURRENT REGIME:")
             lines.append(f"  {regime.regime.value}")
             lines.append(f"  Confidence: {regime.probability:.1%}")
             lines.append(f"  Description: {regime.description}")
@@ -883,7 +883,7 @@ class SignalAggregator:
         # Top opportunities
         opportunities = self.get_top_opportunities(n=5)
         if opportunities:
-            lines.append("⭐ TOP OPPORTUNITIES:")
+            lines.append(" TOP OPPORTUNITIES:")
             for opp in opportunities:
                 entity = opp.ticker or opp.factor or "Market"
                 lines.append(

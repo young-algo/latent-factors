@@ -610,9 +610,9 @@ class DecisionSynthesizer:
         lines = []
 
         # Header
-        lines.append("═" * 70)
+        lines.append("" * 70)
         lines.append(f"MORNING BRIEFING - {state.date.strftime('%Y-%m-%d')}")
-        lines.append("═" * 70)
+        lines.append("" * 70)
         lines.append("")
 
         # Regime section
@@ -633,7 +633,7 @@ class DecisionSynthesizer:
         if state.extremes_detected:
             lines.append("EXTREMES DETECTED:")
             for ext in state.extremes_detected:
-                lines.append(f"  ⚠ {ext.name}: z-score {ext.z_score:.1f} ({ext.direction})")
+                lines.append(f"   {ext.name}: z-score {ext.z_score:.1f} ({ext.direction})")
         else:
             lines.append("EXTREMES DETECTED: None today")
         lines.append("")
@@ -644,15 +644,15 @@ class DecisionSynthesizer:
         lines.append("")
 
         # Recommendations by category
-        lines.append("─" * 70)
+        lines.append("" * 70)
         lines.append("RECOMMENDATIONS")
-        lines.append("─" * 70)
+        lines.append("" * 70)
 
         for category in [ActionCategory.OPPORTUNISTIC, ActionCategory.WEEKLY_REBALANCE, ActionCategory.WATCH]:
             cat_recs = [r for r in recommendations if r.category == category]
             if cat_recs:
                 lines.append("")
-                lines.append(f"▸ {category.value}")
+                lines.append(f" {category.value}")
                 for rec in cat_recs:
                     lines.extend(self._format_recommendation(rec))
 
@@ -661,18 +661,18 @@ class DecisionSynthesizer:
             lines.append("No actionable recommendations at this time.")
 
         lines.append("")
-        lines.append("═" * 70)
+        lines.append("" * 70)
 
         return "\n".join(lines)
 
     def _strength_symbol(self, strength: str, is_positive: bool) -> str:
         """Return symbol for momentum strength."""
         if strength == "strong":
-            return "✓" if is_positive else "✗"
+            return "" if is_positive else ""
         elif strength == "moderate":
-            return "✓" if is_positive else "✗"
+            return "" if is_positive else ""
         else:
-            return "○"
+            return ""
 
     def _calculate_overall_alignment(self, state: SignalState) -> int:
         """Calculate overall signal alignment score."""
@@ -703,37 +703,37 @@ class DecisionSynthesizer:
         """Format a single recommendation."""
         lines = []
         lines.append("")
-        lines.append(f"┌{'─' * 68}┐")
-        lines.append(f"│ ACTION: {rec.action:<58}│")
-        lines.append(f"├{'─' * 68}┤")
-        lines.append(f"│ Conviction: {rec.conviction.value} ({rec.conviction_score}/10){' ' * (68 - 25 - len(rec.conviction.value))}│")
-        lines.append(f"│{' ' * 68}│")
-        lines.append(f"│ WHY:{' ' * 63}│")
+        lines.append(f"{'' * 68}")
+        lines.append(f" ACTION: {rec.action:<58}")
+        lines.append(f"{'' * 68}")
+        lines.append(f" Conviction: {rec.conviction.value} ({rec.conviction_score}/10){' ' * (68 - 25 - len(rec.conviction.value))}")
+        lines.append(f"{' ' * 68}")
+        lines.append(f" WHY:{' ' * 63}")
         for reason in rec.reasons[:3]:  # Limit to 3 reasons
             reason_trimmed = reason[:62]
-            lines.append(f"│  • {reason_trimmed:<63}│")
+            lines.append(f"  • {reason_trimmed:<63}")
 
         if rec.conflicts:
-            lines.append(f"│{' ' * 68}│")
-            lines.append(f"│ CONFLICTS:{' ' * 57}│")
+            lines.append(f"{' ' * 68}")
+            lines.append(f" CONFLICTS:{' ' * 57}")
             for conflict in rec.conflicts[:2]:
                 conflict_trimmed = conflict[:62]
-                lines.append(f"│  • {conflict_trimmed:<63}│")
+                lines.append(f"  • {conflict_trimmed:<63}")
         else:
-            lines.append(f"│{' ' * 68}│")
-            lines.append(f"│ CONFLICTS: None{' ' * 52}│")
+            lines.append(f"{' ' * 68}")
+            lines.append(f" CONFLICTS: None{' ' * 52}")
 
         if rec.expressions:
-            lines.append(f"│{' ' * 68}│")
-            lines.append(f"│ SUGGESTED EXPRESSION:{' ' * 46}│")
+            lines.append(f"{' ' * 68}")
+            lines.append(f" SUGGESTED EXPRESSION:{' ' * 46}")
             for expr in rec.expressions[:2]:
                 expr_str = f"{expr.description}: {expr.trade} ({expr.size_pct:.0%})"[:62]
-                lines.append(f"│  • {expr_str:<63}│")
+                lines.append(f"  • {expr_str:<63}")
 
-        lines.append(f"│{' ' * 68}│")
+        lines.append(f"{' ' * 68}")
         exit_trimmed = rec.exit_trigger[:55]
-        lines.append(f"│ EXIT: {exit_trimmed:<61}│")
-        lines.append(f"└{'─' * 68}┘")
+        lines.append(f" EXIT: {exit_trimmed:<61}")
+        lines.append(f"{'' * 68}")
 
         return lines
 

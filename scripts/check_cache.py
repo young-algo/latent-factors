@@ -185,7 +185,7 @@ def check_database(db_path, name):
     >>> check_database("./missing.db", "Missing DB")
     === Missing DB ===
     Path: ./missing.db
-    ❌ Database does not exist
+     Database does not exist
     
     Notes
     -----
@@ -198,7 +198,7 @@ def check_database(db_path, name):
     print(f"Path: {db_path}")
     
     if not os.path.exists(db_path):
-        print("❌ Database does not exist")
+        print(" Database does not exist")
         return
     
     size_mb = os.path.getsize(db_path) / (1024 * 1024)
@@ -248,7 +248,7 @@ def check_database(db_path, name):
                 print(f"ETF holdings: {etf_rows:,} rows, ETFs: {etfs}")
                 
     except Exception as e:
-        print(f"❌ Error reading database: {e}")
+        print(f" Error reading database: {e}")
 
 # Check all potential database locations
 databases = [

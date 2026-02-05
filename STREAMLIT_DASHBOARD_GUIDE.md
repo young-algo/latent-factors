@@ -4,8 +4,8 @@
 
 The Alpha Command Center dashboard has been enhanced with Phase 2 capabilities:
 
-1. **🎯 Regime RS-MVO Tab** - Conditional optimization based on market regimes
-2. **🤖 Meta-Model Tab** - XGBoost-based signal aggregation with walk-forward training
+1. ** Regime RS-MVO Tab** - Conditional optimization based on market regimes
+2. ** Meta-Model Tab** - XGBoost-based signal aggregation with walk-forward training
 
 ## Running the Dashboard
 
@@ -20,7 +20,7 @@ streamlit run src/dashboard_alpha_command_center.py
 
 ## Phase 2 Features
 
-### 1. 🎯 Regime Conditional Optimization (RS-MVO)
+### 1.  Regime Conditional Optimization (RS-MVO)
 
 **What it does:**
 - Filters historical data by market regime (e.g., Low Vol Bull, High Vol Bear)
@@ -29,12 +29,12 @@ streamlit run src/dashboard_alpha_command_center.py
 - Compares data-driven weights vs heuristic (rules-based) weights
 
 **How to use:**
-1. Navigate to the "🎯 Regime RS-MVO" tab
+1. Navigate to the " Regime RS-MVO" tab
 2. Configure parameters:
    - **Lookback Window**: Historical period to analyze (default: 2520 days ~ 10 years)
    - **Min Observations**: Minimum regime-specific samples needed (default: 50)
    - **Target Regime**: Select which regime to optimize for
-3. Click "🚀 Run RS-MVO Optimization"
+3. Click " Run RS-MVO Optimization"
 4. Review the weight comparison charts
 
 **Key Outputs:**
@@ -42,7 +42,7 @@ streamlit run src/dashboard_alpha_command_center.py
 - Heuristic weights (rules-based fallback)
 - Weight differences showing which factors get more/less weight
 
-### 2. 🤖 Meta-Model Signal Aggregation
+### 2.  Meta-Model Signal Aggregation
 
 **What it does:**
 - Trains XGBoost classifier on historical signal features
@@ -51,7 +51,7 @@ streamlit run src/dashboard_alpha_command_center.py
 - Extracts features from momentum, regime, and cross-sectional signals
 
 **How to use:**
-1. Navigate to the "🤖 Meta-Model" tab
+1. Navigate to the " Meta-Model" tab
 2. Configure training parameters:
    - **Min Training Samples**: Default 252 (~1 year)
    - **Prediction Horizon**: Forward return horizon (default: 5 days)
@@ -59,7 +59,7 @@ streamlit run src/dashboard_alpha_command_center.py
 3. Select market returns source:
    - Use factor mean as proxy, OR
    - Upload market returns CSV
-4. Click "🚀 Train Meta-Model (Walk-Forward)"
+4. Click " Train Meta-Model (Walk-Forward)"
 5. Once trained, click "Generate Meta-Consensus Signal" for predictions
 
 **Key Outputs:**
@@ -129,11 +129,11 @@ The meta-model automatically extracts features from:
 
 | Tab | Purpose |
 |-----|---------|
-| 🔬 Factor Lab | Factor discovery, naming, and X-ray analysis |
-| 🛠️ Portfolio Constructor | Optimization sandbox and trade basket generation |
-| 🎯 Regime RS-MVO | **Phase 2** - Conditional regime-based optimization |
-| 🤖 Meta-Model | **Phase 2** - ML-based signal aggregation |
-| ⚠️ Risk & Drawdown | Risk metrics and drawdown monitoring |
+|  Factor Lab | Factor discovery, naming, and X-ray analysis |
+|  Portfolio Constructor | Optimization sandbox and trade basket generation |
+|  Regime RS-MVO | **Phase 2** - Conditional regime-based optimization |
+|  Meta-Model | **Phase 2** - ML-based signal aggregation |
+|  Risk & Drawdown | Risk metrics and drawdown monitoring |
 
 ## Version History
 

@@ -39,13 +39,13 @@ def analyze_recent_performance(num_factors, period_days=14):
     Analyze actual factor performance from saved factor returns.
     Uses real factor returns from the most recent analysis.
     """
-    print(f"📊 Factor Performance Analysis: Last {period_days} Days")
+    print(f" Factor Performance Analysis: Last {period_days} Days")
     print("=" * 60)
     
     config, factor_names = load_config_and_names()
     
-    print(f"✅ Analysis based on {config['method']} factors from {config['symbols']}")
-    print(f"✅ Loaded {len(factor_names)} factor names")
+    print(f" Analysis based on {config['method']} factors from {config['symbols']}")
+    print(f" Loaded {len(factor_names)} factor names")
     
     # Load actual factor returns
     factor_returns_file = 'factor_returns.csv'
@@ -94,12 +94,12 @@ def analyze_recent_performance(num_factors, period_days=14):
     
     # Actual date range from data
     
-    print(f"\n📅 Analysis Period:")
+    print(f"\n Analysis Period:")
     print(f"   Start: {start_date.strftime('%Y-%m-%d')}")
     print(f"   End: {end_date.strftime('%Y-%m-%d')}")
     print(f"   Duration: {period_days} days")
     
-    print(f"\n🏆 BEST PERFORMING FACTORS (Last {period_days} Days):")
+    print(f"\n BEST PERFORMING FACTORS (Last {period_days} Days):")
     print("-" * 75)
     print(f"{'Rank':<4} {'Factor':<8} {'Return (bps)':<12} {'Name':<45}")
     print("-" * 75)
@@ -107,7 +107,7 @@ def analyze_recent_performance(num_factors, period_days=14):
     for i, (_, row) in enumerate(performance_summary.head(5).iterrows(), 1):
         print(f"{i:<4} {row['Factor']:<8} {row['Return_bps']:>+8.0f}      {row['Name']:<45}")
     
-    print(f"\n📉 WORST PERFORMING FACTORS (Last {period_days} Days):")
+    print(f"\n WORST PERFORMING FACTORS (Last {period_days} Days):")
     print("-" * 75)
     print(f"{'Rank':<4} {'Factor':<8} {'Return (bps)':<12} {'Name':<45}")
     print("-" * 75)
@@ -116,7 +116,7 @@ def analyze_recent_performance(num_factors, period_days=14):
         print(f"{i:<4} {row['Factor']:<8} {row['Return_bps']:>+8.0f}      {row['Name']:<45}")
     
     # Summary statistics
-    print(f"\n📈 SUMMARY STATISTICS (Last {period_days} Days):")
+    print(f"\n SUMMARY STATISTICS (Last {period_days} Days):")
     print(f"   Best Factor Return: {performance_summary['Return_bps'].max():+.0f} bps ({performance_summary.iloc[0]['Factor']})")
     print(f"   Worst Factor Return: {performance_summary['Return_bps'].min():+.0f} bps ({performance_summary.iloc[-1]['Factor']})")
     print(f"   Average Return: {performance_summary['Return_bps'].mean():+.1f} bps")
@@ -125,17 +125,17 @@ def analyze_recent_performance(num_factors, period_days=14):
     print(f"   Negative Factors: {(performance_summary['Return_bps'] < 0).sum()}/{len(performance_summary)}")
     
     # Top factor categories
-    print(f"\n🎯 FACTOR INSIGHTS:")
+    print(f"\n FACTOR INSIGHTS:")
     best_factor = performance_summary.iloc[0]
     worst_factor = performance_summary.iloc[-1]
-    print(f"   🥇 Best: {best_factor['Name']} ({best_factor['Return_bps']:+.0f} bps)")
-    print(f"   🥉 Worst: {worst_factor['Name']} ({worst_factor['Return_bps']:+.0f} bps)")
+    print(f"    Best: {best_factor['Name']} ({best_factor['Return_bps']:+.0f} bps)")
+    print(f"    Worst: {worst_factor['Name']} ({worst_factor['Return_bps']:+.0f} bps)")
     
     # Save results
     performance_summary.to_csv(f'factor_performance_{period_days}d.csv', index=False)
-    print(f"\n💾 Detailed results saved to 'factor_performance_{period_days}d.csv'")
+    print(f"\n Detailed results saved to 'factor_performance_{period_days}d.csv'")
     
-    print(f"\n✅ NOTE: This analysis uses actual factor returns from your recent analysis.")
+    print(f"\n NOTE: This analysis uses actual factor returns from your recent analysis.")
     print(f"   Data based on {len(recent_returns)} days of factor return history.")
     print(f"   Factor returns calculated from {config.get('resolved_symbols', 'N/A')} stocks.")
 
@@ -151,7 +151,7 @@ def main():
         config, factor_names = load_config_and_names()
         analyze_recent_performance(len(factor_names), period_days=args.days)
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f" Error: {e}")
 
 if __name__ == "__main__":
     main()

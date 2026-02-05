@@ -73,7 +73,7 @@ except ImportError:
 st.set_page_config(
     page_title="AlphaCmd | Factor Operations Terminal",
     layout="wide",
-    page_icon="📈",
+    page_icon="",
     initial_sidebar_state="expanded"
 )
 
@@ -420,7 +420,7 @@ def calculate_portfolio_vitals(
 
 def render_morning_coffee_header(data: dict, analyzers: dict):
     """Render the 'Morning Coffee' header section."""
-    st.markdown("<h1>📈 ALPHACMD | FACTOR OPERATIONS TERMINAL</h1>", unsafe_allow_html=True)
+    st.markdown("<h1> ALPHACMD | FACTOR OPERATIONS TERMINAL</h1>", unsafe_allow_html=True)
     
     returns = data.get('returns')
     loadings = data.get('loadings')
@@ -434,13 +434,13 @@ def render_morning_coffee_header(data: dict, analyzers: dict):
     
     with col1:
         # Market Regime Gauge
-        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'>🎯 MARKET REGIME</h3>", 
+        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> MARKET REGIME</h3>", 
                    unsafe_allow_html=True)
         fig = create_regime_gauge_chart(regime_detector)
         st.plotly_chart(fig, use_container_width=True, key="regime_gauge")
     
     with col2:
-        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'>📊 ACTIVE RISK</h3>", 
+        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> ACTIVE RISK</h3>", 
                    unsafe_allow_html=True)
         st.metric(
             label="Tracking Error",
@@ -451,23 +451,23 @@ def render_morning_coffee_header(data: dict, analyzers: dict):
         st.caption("vs Benchmark (VTHR)")
         
         # Risk status indicator
-        risk_status = "🟢" if 0.04 <= vitals['active_risk'] <= 0.06 else "🟡" if vitals['active_risk'] < 0.08 else "🔴"
+        risk_status = "🟢" if 0.04 <= vitals['active_risk'] <= 0.06 else "🟡" if vitals['active_risk'] < 0.08 else ""
         st.markdown(f"**Status:** {risk_status} {'In Range' if 0.04 <= vitals['active_risk'] <= 0.06 else 'Review Required'}")
     
     with col3:
-        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'>📉 ESTIMATED BETA</h3>", 
+        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> ESTIMATED BETA</h3>", 
                    unsafe_allow_html=True)
         beta_color = "normal" if abs(vitals['est_beta']) < 0.1 else "inverse"
         st.metric(
             label="Market Beta",
             value=f"{vitals['est_beta']:.3f}",
-            delta=f"{'Market Neutral ✓' if abs(vitals['est_beta']) < 0.1 else 'Review Hedge'}",
+            delta=f"{'Market Neutral ' if abs(vitals['est_beta']) < 0.1 else 'Review Hedge'}",
             delta_color=beta_color
         )
         st.caption("Target: ±0.1 for Market Neutral")
     
     with col4:
-        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'>👻 UNEXPLAINED PnL</h3>", 
+        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> UNEXPLAINED PnL</h3>", 
                    unsafe_allow_html=True)
         ghost_color = "normal" if vitals['unexplained_pnl'] < 0.3 else "inverse"
         st.metric(
@@ -479,7 +479,7 @@ def render_morning_coffee_header(data: dict, analyzers: dict):
         st.caption("Not explained by factors")
     
     with col5:
-        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'>📈 INFO RATIO</h3>", 
+        st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> INFO RATIO</h3>", 
                    unsafe_allow_html=True)
         st.metric(
             label="Information Ratio",
@@ -1087,21 +1087,21 @@ def create_factor_dna_table(
 
 def render_factor_lab(data: dict, analyzers: dict):
     """Render the Factor Lab section with X-Ray view."""
-    st.markdown("<h2>🔬 FACTOR LAB: Discovery & Explainability</h2>", unsafe_allow_html=True)
+    st.markdown("<h2> FACTOR LAB: Discovery & Explainability</h2>", unsafe_allow_html=True)
     
     returns = data.get('returns')
     loadings = data.get('loadings')
     names = data.get('names', {})
     
     if returns is None:
-        st.error("❌ Factor returns data not available. Run discovery first.")
+        st.error(" Factor returns data not available. Run discovery first.")
         return
     
     # Discovery Controls
     col1, col2, col3 = st.columns([1, 1, 2])
     
     with col1:
-        st.markdown("**🔧 Discovery Settings**")
+        st.markdown("** Discovery Settings**")
         method = st.selectbox(
             "Extraction Method",
             ["PCA (Linear)", "ICA (Independent)", "Autoencoder (Non-Linear)"],
@@ -1111,7 +1111,7 @@ def render_factor_lab(data: dict, analyzers: dict):
         n_factors = st.slider("Active Factors", 5, min(20, len(returns.columns)), 10)
     
     with col2:
-        st.markdown("**🚫 Beta Removal**")
+        st.markdown("** Beta Removal**")
         remove_beta = st.checkbox(
             "Remove Market Beta First",
             value=True,
@@ -1124,10 +1124,10 @@ def render_factor_lab(data: dict, analyzers: dict):
             help="Remove sector exposures"
         )
         
-        st.info("✓ Beta removal prevents 'Beta in Disguise' factors")
+        st.info(" Beta removal prevents 'Beta in Disguise' factors")
     
     with col3:
-        st.markdown("**📊 Factor Summary Stats**")
+        st.markdown("** Factor Summary Stats**")
         
         # Quick stats
         if returns is not None:
@@ -1142,14 +1142,14 @@ def render_factor_lab(data: dict, analyzers: dict):
             with c3:
                 high_beta_count = sum(1 for f in returns.columns 
                                      if calculate_factor_purity(returns, f) < 0.5)
-                st.metric("⚠️ Beta Factors", high_beta_count, 
+                st.metric(" Beta Factors", high_beta_count, 
                          delta="Review" if high_beta_count > 0 else "OK",
                          delta_color="inverse" if high_beta_count > 0 else "normal")
     
     st.markdown("---")
     
     # LLM Naming Section
-    st.markdown("### 🤖 Factor Naming with LLM")
+    st.markdown("###  Factor Naming with LLM")
     
     name_col1, name_col2, name_col3 = st.columns([2, 1, 1])
     
@@ -1163,12 +1163,12 @@ def render_factor_lab(data: dict, analyzers: dict):
         api_key_available = bool(os.getenv("OPENAI_API_KEY"))
         
         if not api_key_available:
-            st.warning("⚠️ OPENAI_API_KEY not set")
+            st.warning(" OPENAI_API_KEY not set")
         else:
-            st.success("✓ API Key ready")
+            st.success(" API Key ready")
     
     with name_col3:
-        if st.button("🚀 Name All Factors with LLM", type="primary", 
+        if st.button(" Name All Factors with LLM", type="primary", 
                     disabled=not api_key_available,
                     help="Fetch fundamental data and batch process all factors with LLM naming"):
             if not api_key_available:
@@ -1193,7 +1193,7 @@ def render_factor_lab(data: dict, analyzers: dict):
                         fundamentals_all = fetch_fundamentals_for_tickers(all_tickers)
                         
                         if not fundamentals_all.empty:
-                            st.success(f"✓ Fetched fundamentals for {len(fundamentals_all)} tickers")
+                            st.success(f" Fetched fundamentals for {len(fundamentals_all)} tickers")
                             with st.expander("View sample fundamental data"):
                                 sample_cols = ['Name', 'Sector', 'Industry', 'MarketCapitalization']
                                 available_cols = [c for c in sample_cols if c in fundamentals_all.columns]
@@ -1243,7 +1243,7 @@ def render_factor_lab(data: dict, analyzers: dict):
                         st.session_state['llm_factor_names'] = llm_names
                         st.session_state['llm_factor_details'] = llm_results
                         
-                        st.success(f"✓ Named {len(llm_names)} factors with enriched data!")
+                        st.success(f" Named {len(llm_names)} factors with enriched data!")
                         
                         # Show results table
                         results_df = pd.DataFrame([
@@ -1254,7 +1254,7 @@ def render_factor_lab(data: dict, analyzers: dict):
                         st.dataframe(results_df, use_container_width=True)
                         
                         # Option to save
-                        if st.button("💾 Save All Names to File"):
+                        if st.button(" Save All Names to File"):
                             import json
                             with open('factor_names_llm.json', 'w') as f:
                                 json.dump(llm_names, f, indent=2)
@@ -1270,7 +1270,7 @@ def render_factor_lab(data: dict, analyzers: dict):
                         st.code(traceback.format_exc())
     
     # Show LLM prompt preview
-    with st.expander("📋 Preview Enriched LLM Prompt"):
+    with st.expander(" Preview Enriched LLM Prompt"):
         st.markdown("""
         **The LLM now receives rich fundamental data for each stock:**
         - Company Name (e.g., "Apple Inc")
@@ -1319,7 +1319,7 @@ def render_factor_lab(data: dict, analyzers: dict):
     st.markdown("---")
     
     # Factor DNA Table
-    st.markdown("### 🧬 Factor DNA Table")
+    st.markdown("###  Factor DNA Table")
     st.caption("Master table of active latent factors with Alpha/Beta classification")
     
     # Merge LLM names if available
@@ -1366,7 +1366,7 @@ def render_factor_lab(data: dict, analyzers: dict):
         if not high_beta_factors.empty:
             st.markdown(f"""
             <div class="alert-beta">
-                ⚠️ <b>BETA ALERT:</b> {len(high_beta_factors)} factor(s) show high correlation to SPY (>70%). 
+                 <b>BETA ALERT:</b> {len(high_beta_factors)} factor(s) show high correlation to SPY (>70%). 
                 These may be "Beta in Disguise" rather than true alpha factors.
             </div>
             """, unsafe_allow_html=True)
@@ -1374,7 +1374,7 @@ def render_factor_lab(data: dict, analyzers: dict):
     st.markdown("---")
     
     # Factor X-Ray (Drill-Down View)
-    st.markdown("### 🔍 Factor X-Ray (Drill-Down Analysis)")
+    st.markdown("###  Factor X-Ray (Drill-Down Analysis)")
     
     # Factor selection for X-Ray
     selected_factor = st.selectbox(
@@ -1393,7 +1393,7 @@ def render_factor_lab(data: dict, analyzers: dict):
         x1, x2, x3 = st.columns([1.5, 1, 1])
         
         with x1:
-            st.markdown("**📝 Factor Analysis & Rationale**")
+            st.markdown("** Factor Analysis & Rationale**")
             
             # Create rich description with actual analysis
             top_pos = loadings[selected_factor].nlargest(10) if selected_factor in loadings.columns else pd.Series()
@@ -1427,14 +1427,14 @@ def render_factor_lab(data: dict, analyzers: dict):
             
             <b style="color:#8888aa;">THEME:</b> {selected_desc.get('theme', 'Unknown')}<br><br>
             
-            <b style="color:#00ff88;">📈 TOP LONG EXPOSURES:</b><br>
+            <b style="color:#00ff88;"> TOP LONG EXPOSURES:</b><br>
             {' → '.join([f"{ticker} ({loading:.3f})" for ticker, loading in top_pos.head(5).items()])}<br><br>
             
-            <b style="color:#ff6666;">📉 TOP SHORT EXPOSURES:</b><br>
+            <b style="color:#ff6666;"> TOP SHORT EXPOSURES:</b><br>
             {' → '.join([f"{ticker} ({loading:.3f})" for ticker, loading in top_neg.head(5).items()])}<br><br>
             
             <div style="background:#0f0f1a; padding:10px; border-radius:4px; margin-top:10px;">
-                <b style="color:#00d4ff;">💡 INVESTMENT RATIONALE:</b><br>
+                <b style="color:#00d4ff;"> INVESTMENT RATIONALE:</b><br>
                 <i>{selected_desc.get('rationale', 'No rationale available')}</i>
             </div>
             
@@ -1455,7 +1455,7 @@ def render_factor_lab(data: dict, analyzers: dict):
             
             llm_col1, llm_col2 = st.columns([2, 1])
             with llm_col1:
-                if st.button("🤖 Enhance with LLM Naming", key=f"llm_name_{selected_factor}", 
+                if st.button(" Enhance with LLM Naming", key=f"llm_name_{selected_factor}", 
                            help="Fetch fundamental data and call OpenAI API for enriched naming"):
                     with st.spinner("Fetching fundamental data and calling LLM..."):
                         try:
@@ -1469,7 +1469,7 @@ def render_factor_lab(data: dict, analyzers: dict):
                             fundamentals = fetch_fundamentals_for_tickers(all_tickers)
                             
                             if not fundamentals.empty:
-                                st.success(f"✓ Fetched fundamentals for {len(fundamentals)} tickers")
+                                st.success(f" Fetched fundamentals for {len(fundamentals)} tickers")
                                 with st.expander("View Fundamental Data"):
                                     st.dataframe(fundamentals[['Name', 'Sector', 'Industry', 'MarketCapitalization', 'PERatio']].head(10))
                             
@@ -1483,7 +1483,7 @@ def render_factor_lab(data: dict, analyzers: dict):
                             )
                             
                             # Show the enriched prompt
-                            with st.expander("📤 View Enriched LLM Prompt (includes style attribution + sector exposure)"):
+                            with st.expander(" View Enriched LLM Prompt (includes style attribution + sector exposure)"):
                                 st.code(enriched_prompt, language="text")
                             
                             # Step 3: Call LLM with centralized logic and enrichment data
@@ -1522,11 +1522,11 @@ def render_factor_lab(data: dict, analyzers: dict):
                             st.code(traceback.format_exc())
             
             with llm_col2:
-                if st.button("💾 Save Name", key=f"save_name_{selected_factor}"):
+                if st.button(" Save Name", key=f"save_name_{selected_factor}"):
                     st.info("Would save to factor_names.json")
         
         with x2:
-            st.markdown("**📊 Style Attribution**")
+            st.markdown("** Style Attribution**")
             
             # Calculate style attribution
             styles = calculate_style_attribution(returns[selected_factor], returns)
@@ -1564,7 +1564,7 @@ def render_factor_lab(data: dict, analyzers: dict):
             st.caption(f"Primary driver: **{max_style}** ({styles[max_style]:.1%})")
         
         with x3:
-            st.markdown("**🏭 Sector Tilt**")
+            st.markdown("** Sector Tilt**")
             
             # Create sample sector data (would come from actual mapping)
             sectors = {
@@ -1603,9 +1603,9 @@ def render_factor_lab(data: dict, analyzers: dict):
             # Check for concentration
             max_sector = max(sectors, key=sectors.get)
             if sectors[max_sector] > 0.5:
-                st.warning(f"⚠️ Heavy {max_sector} tilt ({sectors[max_sector]:.1%})")
+                st.warning(f" Heavy {max_sector} tilt ({sectors[max_sector]:.1%})")
             else:
-                st.success(f"✓ Diversified sector exposure")
+                st.success(f" Diversified sector exposure")
 
 
 # =============================================================================
@@ -1675,21 +1675,21 @@ def estimate_liquidity_impact(position_value: float, avg_daily_volume: float) ->
 
 def render_portfolio_constructor(data: dict, analyzers: dict):
     """Render the Portfolio Constructor section."""
-    st.markdown("<h2>🛠️ PORTFOLIO CONSTRUCTOR: Execution & 'What-If' Analysis</h2>", 
+    st.markdown("<h2> PORTFOLIO CONSTRUCTOR: Execution & 'What-If' Analysis</h2>", 
                unsafe_allow_html=True)
     
     returns = data.get('returns')
     loadings = data.get('loadings')
     
     if returns is None or loadings is None:
-        st.error("❌ Data not available for portfolio construction")
+        st.error(" Data not available for portfolio construction")
         return
     
     # Create tabs for different views
     tab_sandbox, tab_trades, tab_backtest = st.tabs([
-        "⚗️ Optimizer Sandbox",
-        "📋 Trade Basket Preview",
-        "📊 Backtest Analysis"
+        " Optimizer Sandbox",
+        " Trade Basket Preview",
+        " Backtest Analysis"
     ])
     
     with tab_sandbox:
@@ -1749,7 +1749,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
                 default=['sharpe', 'momentum', 'risk_parity']
             )
             
-            run_opt = st.button("🚀 Run Optimizer", type="primary", use_container_width=True)
+            run_opt = st.button(" Run Optimizer", type="primary", use_container_width=True)
         
         with o3:
             st.markdown("**Efficient Frontier**")
@@ -1819,7 +1819,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
                         )
                         
                         st.session_state['opt_result'] = result
-                        st.success(f"✓ Optimization complete! Sharpe: {result.sharpe_ratio:.2f}")
+                        st.success(f" Optimization complete! Sharpe: {result.sharpe_ratio:.2f}")
                     except Exception as e:
                         st.error(f"Optimization failed: {e}")
     
@@ -1907,7 +1907,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
             return ''
         
         with t1:
-            st.markdown("**📈 Top Long Positions**")
+            st.markdown("** Top Long Positions**")
             
             # Take head before styling
             long_display = long_positions.head(10).copy()
@@ -1924,7 +1924,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
             st.dataframe(styled_long, use_container_width=True, height=350)
         
         with t2:
-            st.markdown("**📉 Top Short Positions**")
+            st.markdown("** Top Short Positions**")
             
             # Take head before styling
             short_display = short_positions.head(10).copy()
@@ -1947,7 +1947,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
         ])
         
         if not high_impact_trades.empty:
-            st.markdown("### ⚠️ Liquidity Alerts")
+            st.markdown("###  Liquidity Alerts")
             
             for _, trade in high_impact_trades.head(5).iterrows():
                 impact = estimate_liquidity_impact(trade['Value ($)'], trade['Est ADV ($)'])
@@ -1962,7 +1962,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            st.success("✓ All trades within liquidity thresholds (<2% ADV)")
+            st.success(" All trades within liquidity thresholds (<2% ADV)")
         
         # Export option
         all_trades = pd.concat([long_positions, short_positions])
@@ -1971,7 +1971,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
         col_dl1, col_dl2 = st.columns([1, 4])
         with col_dl1:
             st.download_button(
-                label="📥 Download Trade File",
+                label=" Download Trade File",
                 data=csv,
                 file_name=f"trade_basket_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
@@ -1981,7 +1981,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
         st.markdown("### Backtest Analysis")
         st.info("Run walk-forward optimization to see historical performance")
         
-        if st.button("📊 Run Walk-Forward Backtest", type="primary"):
+        if st.button(" Run Walk-Forward Backtest", type="primary"):
             with st.spinner("Running walk-forward analysis (this may take a few minutes)..."):
                 try:
                     optimizer = SharpeOptimizer(returns, loadings)
@@ -2045,7 +2045,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
                     # Overfitting warning
                     if avg_train > 1.0 and avg_test < 0.5:
                         st.error("""
-                        ⚠️ **OVERFITTING DETECTED**: High train Sharpe but low test Sharpe suggests 
+                         **OVERFITTING DETECTED**: High train Sharpe but low test Sharpe suggests 
                         the model is fitting to noise. Consider:
                         - Reducing number of factors
                         - Increasing regularization
@@ -2062,7 +2062,7 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
 
 def render_regime_conditional_optimization(data: dict, analyzers: dict):
     """Render the Phase 2 Regime-Switching Mean-Variance Optimization panel."""
-    st.markdown("<h2>🎯 REGIME CONDITIONAL OPTIMIZATION (RS-MVO)</h2>", 
+    st.markdown("<h2> REGIME CONDITIONAL OPTIMIZATION (RS-MVO)</h2>", 
                unsafe_allow_html=True)
     st.caption("Data-driven factor weights conditional on market regime | Phase 2 Enhancement")
     
@@ -2070,18 +2070,18 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
     regime_detector = analyzers.get('regime')
     
     if returns is None:
-        st.error("❌ Factor returns data not available")
+        st.error(" Factor returns data not available")
         return
     
     if regime_detector is None or regime_detector.hmm_model is None:
-        st.error("❌ Regime detector not initialized. Fit HMM first.")
+        st.error(" Regime detector not initialized. Fit HMM first.")
         return
     
     # Current regime display
     current_regime = regime_detector.detect_current_regime()
     regime_probs = regime_detector.get_regime_probabilities()
     
-    st.markdown("### 📊 Current Market Regime")
+    st.markdown("###  Current Market Regime")
     
     col1, col2, col3 = st.columns([1, 1, 1.5])
     
@@ -2129,7 +2129,7 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
     st.markdown("---")
     
     # RS-MVO Configuration
-    st.markdown("### ⚙️ RS-MVO Configuration")
+    st.markdown("###  RS-MVO Configuration")
     
     config_col1, config_col2, config_col3 = st.columns(3)
     
@@ -2166,7 +2166,7 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
     st.markdown("---")
     
     # Run Conditional Optimization
-    if st.button("🚀 Run RS-MVO Optimization", type="primary"):
+    if st.button(" Run RS-MVO Optimization", type="primary"):
         with st.spinner(f"Running Regime-Switching MVO for {target_regime.value}..."):
             try:
                 # Get conditional weights
@@ -2185,7 +2185,7 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
                 st.session_state['rsmvo_heuristic'] = heuristic_weights
                 st.session_state['rsmvo_regime'] = target_regime
                 
-                st.success(f"✓ RS-MVO complete for {target_regime.value}!")
+                st.success(f" RS-MVO complete for {target_regime.value}!")
                 
             except Exception as e:
                 st.error(f"RS-MVO failed: {e}")
@@ -2198,12 +2198,12 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
         heuristic = st.session_state['rsmvo_heuristic']
         target = st.session_state['rsmvo_regime']
         
-        st.markdown("### 📈 Optimization Results")
+        st.markdown("###  Optimization Results")
         
         res_col1, res_col2 = st.columns(2)
         
         with res_col1:
-            st.markdown("**🎯 RS-MVO Weights (Data-Driven)**")
+            st.markdown("** RS-MVO Weights (Data-Driven)**")
             
             # Create comparison dataframe
             comp_df = pd.DataFrame({
@@ -2254,7 +2254,7 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
             st.plotly_chart(fig_weights, use_container_width=True, key="rsmvo_weights_comp")
         
         with res_col2:
-            st.markdown("**📊 Weight Differences (RS-MVO vs Heuristic)**")
+            st.markdown("** Weight Differences (RS-MVO vs Heuristic)**")
             
             # Difference chart
             diff_df = comp_df.sort_values('Difference', ascending=True)
@@ -2284,7 +2284,7 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
             st.plotly_chart(fig_diff, use_container_width=True, key="rsmvo_diff")
         
         # Key insights
-        st.markdown("### 💡 Key Insights")
+        st.markdown("###  Key Insights")
         
         # Find largest deviations
         top_increases = comp_df.nlargest(3, 'Difference')
@@ -2293,14 +2293,14 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
         insight_col1, insight_col2 = st.columns(2)
         
         with insight_col1:
-            st.markdown("**📈 Factors RS-MVO Overweights vs Heuristic:**")
+            st.markdown("** Factors RS-MVO Overweights vs Heuristic:**")
             for _, row in top_increases.iterrows():
                 if row['Difference'] > 0.01:
                     st.markdown(f"- **{row['Factor']}**: +{row['Difference']:.1%} "
                               f"({row['Heuristic Weight']:.1%} → {row['RS-MVO Weight']:.1%})")
         
         with insight_col2:
-            st.markdown("**📉 Factors RS-MVO Underweights vs Heuristic:**")
+            st.markdown("** Factors RS-MVO Underweights vs Heuristic:**")
             for _, row in top_decreases.iterrows():
                 if row['Difference'] < -0.01:
                     st.markdown(f"- **{row['Factor']}**: {row['Difference']:.1%} "
@@ -2309,7 +2309,7 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
         # Export option
         csv = comp_df.to_csv(index=False)
         st.download_button(
-            label="📥 Download RS-MVO Weights",
+            label=" Download RS-MVO Weights",
             data=csv,
             file_name=f"rsmvo_weights_{target.value}_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
@@ -2322,7 +2322,7 @@ def render_regime_conditional_optimization(data: dict, analyzers: dict):
 
 def render_meta_model_aggregation(data: dict, analyzers: dict):
     """Render the Phase 2 XGBoost Meta-Model Signal Aggregation panel."""
-    st.markdown("<h2>🤖 META-MODEL SIGNAL AGGREGATION</h2>", 
+    st.markdown("<h2> META-MODEL SIGNAL AGGREGATION</h2>", 
                unsafe_allow_html=True)
     st.caption("Gradient Boosting consensus with non-linear signal interactions | Phase 2 Enhancement")
     
@@ -2332,15 +2332,15 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
     momentum_analyzer = analyzers.get('momentum')
     
     if returns is None:
-        st.error("❌ Factor returns data not available")
+        st.error(" Factor returns data not available")
         return
     
     # Check XGBoost availability
     if not XGBOOST_AVAILABLE:
-        st.warning("⚠️ XGBoost not installed. Meta-model will use voting fallback.")
+        st.warning(" XGBoost not installed. Meta-model will use voting fallback.")
         st.info("Install with: `pip install xgboost` for full functionality")
     
-    st.markdown("### 📊 Meta-Model Configuration")
+    st.markdown("###  Meta-Model Configuration")
     
     config_col1, config_col2, config_col3 = st.columns(3)
     
@@ -2375,7 +2375,7 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
                                           help="Use voting if model untrained")
     
     # Advanced options
-    with st.expander("🔧 Advanced Model Parameters"):
+    with st.expander(" Advanced Model Parameters"):
         adv_col1, adv_col2, adv_col3 = st.columns(3)
         
         with adv_col1:
@@ -2393,7 +2393,7 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
     st.markdown("---")
     
     # Feature extraction preview
-    st.markdown("### 🔍 Feature Extraction Preview")
+    st.markdown("###  Feature Extraction Preview")
     st.caption("Features extracted from signal sources for meta-model input")
     
     # Create a sample feature extraction
@@ -2433,7 +2433,7 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
     st.markdown("---")
     
     # Model Training
-    st.markdown("### 🏋️ Model Training")
+    st.markdown("###  Model Training")
     
     train_col1, train_col2 = st.columns([1, 2])
     
@@ -2444,19 +2444,19 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
         
         if use_proxy_market:
             market_proxy = returns.mean(axis=1)
-            st.success(f"✓ Using factor mean as market proxy ({len(market_proxy)} days)")
+            st.success(f" Using factor mean as market proxy ({len(market_proxy)} days)")
         else:
             uploaded_market = st.file_uploader("Upload Market Returns CSV", type=['csv'])
             if uploaded_market:
                 market_proxy = pd.read_csv(uploaded_market, index_col=0, parse_dates=True).squeeze()
             else:
                 market_proxy = None
-                st.warning("⚠️ No market returns provided")
+                st.warning(" No market returns provided")
     
     with train_col2:
-        if st.button("🚀 Train Meta-Model (Walk-Forward)", type="primary", use_container_width=True):
+        if st.button(" Train Meta-Model (Walk-Forward)", type="primary", use_container_width=True):
             if market_proxy is None:
-                st.error("❌ Market returns required for training")
+                st.error(" Market returns required for training")
             else:
                 with st.spinner("Training XGBoost meta-model with walk-forward validation..."):
                     try:
@@ -2499,7 +2499,7 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
                         st.session_state['meta_model'] = aggregator
                         st.session_state['model_trained'] = True
                         
-                        st.success("✓ Meta-model training complete!")
+                        st.success(" Meta-model training complete!")
                         
                         # Show feature importance if available
                         importance_df = aggregator.get_model_feature_importance()
@@ -2514,14 +2514,14 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
     # Display training results
     if 'model_trained' in st.session_state and st.session_state['model_trained']:
         st.markdown("---")
-        st.markdown("### 📈 Model Performance & Predictions")
+        st.markdown("###  Model Performance & Predictions")
         
         aggregator = st.session_state['meta_model']
         
         perf_col1, perf_col2, perf_col3 = st.columns(3)
         
         with perf_col1:
-            st.metric("Model Status", "✓ Trained" if aggregator._model_trained else "Fallback")
+            st.metric("Model Status", " Trained" if aggregator._model_trained else "Fallback")
         
         with perf_col2:
             st.metric("Training Samples", len(aggregator._training_X) if hasattr(aggregator, '_training_X') else "N/A")
@@ -2531,7 +2531,7 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
         
         # Feature importance
         if 'feature_importance' in st.session_state:
-            st.markdown("**🔍 Feature Importance (Top 10)**")
+            st.markdown("** Feature Importance (Top 10)**")
             importance = st.session_state['feature_importance'].head(10)
             
             fig_imp = go.Figure()
@@ -2554,7 +2554,7 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
             st.plotly_chart(fig_imp, use_container_width=True, key="feature_importance")
         
         # Generate current prediction
-        st.markdown("### 🎯 Current Consensus Prediction")
+        st.markdown("###  Current Consensus Prediction")
         
         if st.button("Generate Meta-Consensus Signal"):
             try:
@@ -2604,7 +2604,7 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
                     st.write(f"**Confidence:** {consensus_signal.confidence:.1f}%")
                 
                 with pred_col3:
-                    st.markdown("**📋 Recommendation**")
+                    st.markdown("** Recommendation**")
                     st.info(consensus_signal.recommendation)
                     st.markdown(f"**Risk Level:** {consensus_signal.risk_level}")
                 
@@ -2615,12 +2615,12 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
                 elif prob_up > 0.55:
                     st.info("🟡 **MODERATE BULLISH**: Slight positive bias detected.")
                 elif prob_up < 0.3:
-                    st.error("🔴 **STRONG BEARISH SIGNAL**: Model predicts high probability of negative returns. "
+                    st.error(" **STRONG BEARISH SIGNAL**: Model predicts high probability of negative returns. "
                             "Consider defensive positioning or hedging.")
                 elif prob_up < 0.45:
                     st.warning("🟠 **MODERATE BEARISH**: Slight negative bias detected.")
                 else:
-                    st.write("⚪ **NEUTRAL**: No clear directional signal. Maintain current positioning.")
+                    st.write(" **NEUTRAL**: No clear directional signal. Maintain current positioning.")
                 
             except Exception as e:
                 st.error(f"Prediction failed: {e}")
@@ -2632,17 +2632,17 @@ def render_meta_model_aggregation(data: dict, analyzers: dict):
 
 def render_risk_drawdown(data: dict, analyzers: dict):
     """Render the Risk & Drawdown section."""
-    st.markdown("<h2>⚠️ RISK & DRAWDOWN: Monitoring & Attribution</h2>", 
+    st.markdown("<h2> RISK & DRAWDOWN: Monitoring & Attribution</h2>", 
                unsafe_allow_html=True)
     
     returns = data.get('returns')
     
     if returns is None:
-        st.error("❌ Returns data not available")
+        st.error(" Returns data not available")
         return
     
     # Risk metrics
-    st.markdown("### 📊 Factor Risk Metrics")
+    st.markdown("###  Factor Risk Metrics")
     
     lookback = st.selectbox(
         "Risk Calculation Window",
@@ -2718,7 +2718,7 @@ def render_risk_drawdown(data: dict, analyzers: dict):
     st.dataframe(styled_risk, use_container_width=True, height=350)
     
     # Drawdown chart
-    st.markdown("### 📉 Factor Drawdown Chart")
+    st.markdown("###  Factor Drawdown Chart")
     
     selected_dd_factors = st.multiselect(
         "Select Factors to Plot",
@@ -2768,14 +2768,14 @@ def render_sidebar(data: dict, analyzers: dict):
     """Render the sidebar with global controls."""
     st.sidebar.markdown("""
     <h1 style='color:#00d4ff; font-size:18px; text-align:center; margin-bottom:20px;'>
-    📡 ALPHA COMMAND
+     ALPHA COMMAND
     </h1>
     """, unsafe_allow_html=True)
     
     st.sidebar.markdown("---")
     
     # Universe Control
-    st.sidebar.markdown("### 🌍 Universe Control")
+    st.sidebar.markdown("###  Universe Control")
     
     universe_date = st.sidebar.date_input(
         "Analysis Date",
@@ -2786,59 +2786,59 @@ def render_sidebar(data: dict, analyzers: dict):
     st.sidebar.info(f"PIT Universe: {universe_date.strftime('%Y-%m-%d')}")
     
     # Data status
-    st.sidebar.markdown("### 📊 Data Status")
+    st.sidebar.markdown("###  Data Status")
     
     if data.get('returns') is not None:
         returns = data['returns']
-        st.sidebar.success(f"✓ Factor Returns: {len(returns.columns)} factors")
+        st.sidebar.success(f" Factor Returns: {len(returns.columns)} factors")
         st.sidebar.caption(f"  Range: {returns.index.min().date()} to {returns.index.max().date()}")
     else:
-        st.sidebar.error("✗ Factor Returns: Not found")
+        st.sidebar.error(" Factor Returns: Not found")
     
     if data.get('loadings') is not None:
         loadings = data['loadings']
-        st.sidebar.success(f"✓ Factor Loadings: {len(loadings)} stocks")
+        st.sidebar.success(f" Factor Loadings: {len(loadings)} stocks")
     else:
-        st.sidebar.error("✗ Factor Loadings: Not found")
+        st.sidebar.error(" Factor Loadings: Not found")
     
     st.sidebar.markdown("---")
     
     # Quick Actions
-    st.sidebar.markdown("### ⚡ Quick Actions")
+    st.sidebar.markdown("###  Quick Actions")
     
-    if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
+    if st.sidebar.button(" Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
     
-    if st.sidebar.button("📥 Export Report", use_container_width=True):
+    if st.sidebar.button(" Export Report", use_container_width=True):
         st.sidebar.info("Report generation would happen here")
     
     st.sidebar.markdown("---")
     
     # System Status
-    st.sidebar.markdown("### 🔧 System Status")
+    st.sidebar.markdown("###  System Status")
     
     with st.sidebar.expander("Database Health"):
         try:
             health = check_database_health()
-            st.write(f"**Status:** {'✅ Healthy' if health['is_healthy'] else '⚠️ Issues'}")
+            st.write(f"**Status:** {' Healthy' if health['is_healthy'] else ' Issues'}")
             st.write(f"**Size:** {health['size_mb']:.1f} MB")
-            st.write(f"**Locked:** {'🔒 Yes' if health['is_locked'] else '🔓 No'}")
+            st.write(f"**Locked:** {' Yes' if health['is_locked'] else ' No'}")
         except Exception as e:
-            st.write(f"⚠️ Check failed: {e}")
+            st.write(f" Check failed: {e}")
     
     with st.sidebar.expander("API Status"):
         st.write("Alpha Vantage: Connected")
         st.write("OpenAI (LLM): Available")
     
     # Phase 2 Status
-    st.sidebar.markdown("### 🚀 Phase 2 Features")
+    st.sidebar.markdown("###  Phase 2 Features")
     
     with st.sidebar.expander("System Capabilities"):
-        st.write(f"✓ RS-MVO: {'Available' if analyzers.get('regime') else 'Needs Regime Detector'}")
-        st.write(f"✓ Meta-Model: {'XGBoost Ready' if XGBOOST_AVAILABLE else 'Voting Fallback'}")
-        st.write("✓ Conditional Optimization: Active")
-        st.write("✓ Walk-Forward Training: Active")
+        st.write(f" RS-MVO: {'Available' if analyzers.get('regime') else 'Needs Regime Detector'}")
+        st.write(f" Meta-Model: {'XGBoost Ready' if XGBOOST_AVAILABLE else 'Voting Fallback'}")
+        st.write(" Conditional Optimization: Active")
+        st.write(" Walk-Forward Training: Active")
 
 
 # =============================================================================
@@ -2860,7 +2860,7 @@ def main():
     # Check if data is available
     if data['returns'] is None:
         st.error("""
-        ## ❌ Data Not Available
+        ##  Data Not Available
         
         Factor returns data not found. Please run:
         ```bash
@@ -2876,11 +2876,11 @@ def main():
     
     # Main tabs (including Phase 2 enhancements)
     tab_discover, tab_construct, tab_phase2_regime, tab_phase2_meta, tab_risk = st.tabs([
-        "🔬 Factor Lab",
-        "🛠️ Portfolio Constructor",
-        "🎯 Regime RS-MVO",  # Phase 2
-        "🤖 Meta-Model",     # Phase 2
-        "⚠️ Risk & Drawdown"
+        " Factor Lab",
+        " Portfolio Constructor",
+        " Regime RS-MVO",  # Phase 2
+        " Meta-Model",     # Phase 2
+        " Risk & Drawdown"
     ])
     
     with tab_discover:

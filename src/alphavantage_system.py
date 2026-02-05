@@ -630,7 +630,7 @@ class DataBackend:
         
         _LOGGER.info("Downloading price data for %s...", ticker)
         self._download_px_av(ticker)
-        _LOGGER.info("✓ Downloaded %s from AlphaVantage", ticker)
+        _LOGGER.info(" Downloaded %s from AlphaVantage", ticker)
 
     def _download_px_av(self, ticker: str) -> None:
         self._rate_limit("px")
@@ -1412,7 +1412,7 @@ class DataBackend:
         >>> tickers = backend.get_historical_universe('2008-09-15', top_n=500)
         >>> print(f"Active tickers on 2008-09-15: {len(tickers)}")
         >>> if 'LEH' in tickers:
-        ...     print("✓ Lehman Brothers correctly included")
+        ...     print(" Lehman Brothers correctly included")
         """
         try:
             with get_db_connection(self.db_path) as con:

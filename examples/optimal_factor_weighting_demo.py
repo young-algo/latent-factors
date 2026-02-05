@@ -212,7 +212,7 @@ def main():
     
     print("\n   Blended weights (Sharpe 30%, IC 30%, Momentum 20%, Risk Parity 20%):")
     for factor, weight in sorted(blended.items()):
-        bar = "█" * int(weight * 50)
+        bar = "" * int(weight * 50)
         print(f"   {factor:<12} {weight:>6.2%} {bar}")
     
     # Demonstrate cross-sectional portfolio construction

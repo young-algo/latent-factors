@@ -267,15 +267,15 @@ uv run python -m src signals cross-section \
 
 ```
 ======================================================================
-🎯 FACTOR WEIGHT OPTIMIZATION
+ FACTOR WEIGHT OPTIMIZATION
 ======================================================================
 
-📊 Loading factor data for universe: SPY
-📂 Loading cached factors from factor_cache_SPY_fundamental.pkl
+ Loading factor data for universe: SPY
+ Loading cached factors from factor_cache_SPY_fundamental.pkl
    Factor returns shape: (252, 5)
    Factor loadings shape: (100, 5)
 
-⚙️  Running single-period optimization...
+  Running single-period optimization...
    Lookback: 126 days
    Methods: sharpe, momentum, risk_parity
    Technique: differential
@@ -295,24 +295,24 @@ Annualized Volatility: 7.48%
 OPTIMIZATION RESULTS
 ======================================================================
 
-📊 Performance Metrics:
+ Performance Metrics:
    Sharpe Ratio:          2.45
    Annualized Return:     18.32%
    Annualized Volatility: 7.48%
 
-🔧 Optimal Method Blend:
-   sharpe                 67.8% █████████████████████████████████
-   momentum               25.7% ████████████
-   risk_parity             6.5% ███
+ Optimal Method Blend:
+   sharpe                 67.8% 
+   momentum               25.7% 
+   risk_parity             6.5% 
 
-📈 Optimal Factor Weights:
-   F1_Value               45.2% ███████████████████████
-   F2_Momentum            28.1% ██████████████
-   F3_Quality             15.3% ███████
-   F4_LowVol               8.9% ████
-   F5_Growth               2.5% █
+ Optimal Factor Weights:
+   F1_Value               45.2% 
+   F2_Momentum            28.1% 
+   F3_Quality             15.3% 
+   F4_LowVol               8.9% 
+   F5_Growth               2.5% 
 
-💾 Weights exported to: optimal_weights.csv
+ Weights exported to: optimal_weights.csv
 ```
 
 ### Exported CSV Format

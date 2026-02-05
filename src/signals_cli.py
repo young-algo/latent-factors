@@ -2,7 +2,7 @@
 """
 Trading Signals CLI - Command Line Interface for Signal Generation
 
-⚠️  DEPRECATION WARNING: This CLI is deprecated. Please use the unified CLI instead:
+  DEPRECATION WARNING: This CLI is deprecated. Please use the unified CLI instead:
     
     uv run python -m src <command>
     
@@ -54,7 +54,7 @@ def get_api_key():
     """Get Alpha Vantage API key from environment."""
     api_key = os.environ.get('ALPHAVANTAGE_API_KEY')
     if not api_key:
-        print("❌ Error: ALPHAVANTAGE_API_KEY environment variable not set")
+        print(" Error: ALPHAVANTAGE_API_KEY environment variable not set")
         print("   Set it with: export ALPHAVANTAGE_API_KEY='your_key'")
         sys.exit(1)
     return api_key
@@ -65,12 +65,12 @@ def load_or_generate_factors(universe, method='fundamental', n_components=8, exp
     cache_file = f"factor_cache_{'_'.join(universe)}_{method}.pkl"
 
     if Path(cache_file).exists():
-        print(f"📂 Loading cached factors from {cache_file}")
+        print(f" Loading cached factors from {cache_file}")
         import pickle
         with open(cache_file, 'rb') as f:
             return pickle.load(f)
 
-    print(f"🔍 Generating factors for universe: {', '.join(universe)}")
+    print(f" Generating factors for universe: {', '.join(universe)}")
     frs = FactorResearchSystem(
         get_api_key(),
         universe=universe,
@@ -91,7 +91,7 @@ def load_or_generate_factors(universe, method='fundamental', n_components=8, exp
 def cmd_generate(args):
     """Generate comprehensive trading signals."""
     print("=" * 70)
-    print("📊 GENERATING TRADING SIGNALS")
+    print(" GENERATING TRADING SIGNALS")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(
@@ -107,7 +107,7 @@ def cmd_generate(args):
 
     if args.output:
         frs.export_signals(args.output)
-        print(f"\n💾 Signals exported to: {args.output}")
+        print(f"\n Signals exported to: {args.output}")
 
     return signals
 
@@ -115,7 +115,7 @@ def cmd_generate(args):
 def cmd_extremes(args):
     """Show extreme value alerts."""
     print("=" * 70)
-    print("🚨 EXTREME VALUE ALERTS")
+    print(" EXTREME VALUE ALERTS")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(args.universe)
@@ -127,7 +127,7 @@ def cmd_extremes(args):
     )
 
     if not alerts:
-        print("\n✅ No extreme value alerts at this time.")
+        print("\n No extreme value alerts at this time.")
         return
 
     print(f"\nFound {len(alerts)} extreme alerts:\n")
@@ -135,11 +135,11 @@ def cmd_extremes(args):
     print("-" * 70)
 
     for alert in alerts:
-        direction = "🔴 EXTREME HIGH" if alert.direction == 'extreme_high' else "🟢 EXTREME LOW"
+        direction = " EXTREME HIGH" if alert.direction == 'extreme_high' else "🟢 EXTREME LOW"
         print(f"{alert.factor_name:<15} {alert.z_score:>10.2f} {alert.percentile:>11.1f}% {direction:<15} {alert.alert_type:<20}")
 
     if args.trade:
-        print("\n💡 Trading Implications:")
+        print("\n Trading Implications:")
         for alert in alerts:
             if alert.direction == 'extreme_high':
                 print(f"   → Consider SHORT on {alert.factor_name} (mean reversion)")
@@ -150,7 +150,7 @@ def cmd_extremes(args):
 def cmd_momentum(args):
     """Analyze factor momentum."""
     print("=" * 70)
-    print("📈 FACTOR MOMENTUM ANALYSIS")
+    print(" FACTOR MOMENTUM ANALYSIS")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(args.universe)
@@ -168,14 +168,14 @@ def cmd_momentum(args):
     for factor in factors:
         signals = analyzer.get_momentum_signals(factor)
 
-        rsi_emoji = "🔴" if signals['rsi'] > 70 else "🟢" if signals['rsi'] < 30 else "⚪"
-        macd_emoji = "🟢" if 'bullish' in signals['macd_signal'] else "🔴" if 'bearish' in signals['macd_signal'] else "⚪"
+        rsi_emoji = "" if signals['rsi'] > 70 else "🟢" if signals['rsi'] < 30 else ""
+        macd_emoji = "🟢" if 'bullish' in signals['macd_signal'] else "" if 'bearish' in signals['macd_signal'] else ""
 
         print(f"{factor:<15} {rsi_emoji}{signals['rsi']:>6.1f} {signals['rsi_signal']:<15} "
               f"{macd_emoji} {signals['macd_signal']:<12} {signals['adx']:>7.1f} {signals['regime']:<20}")
 
     if args.plot:
-        print("\n📊 Generating momentum charts...")
+        print("\n Generating momentum charts...")
         for factor in factors[:3]:  # Plot first 3
             rsi = analyzer.calculate_rsi(factor)
             print(f"   {factor}: Current RSI = {rsi.iloc[-1]:.2f}")
@@ -184,7 +184,7 @@ def cmd_momentum(args):
 def cmd_cross_section(args):
     """Generate cross-sectional rankings."""
     print("=" * 70)
-    print("🔥 CROSS-SECTIONAL RANKINGS")
+    print(" CROSS-SECTIONAL RANKINGS")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(args.universe)
@@ -200,14 +200,14 @@ def cmd_cross_section(args):
     longs = [s for s in signals if s.direction.value == 'long']
     shorts = [s for s in signals if s.direction.value == 'short']
 
-    print(f"\n📈 TOP {int(args.top_pct*100)}% LONG CANDIDATES:")
+    print(f"\n TOP {int(args.top_pct*100)}% LONG CANDIDATES:")
     print("-" * 70)
     print(f"{'Ticker':<10} {'Score':>10} {'Decile':>8} {'Rank':>8} {'Conf':>8}")
     print("-" * 70)
     for sig in sorted(longs, key=lambda x: x.rank)[:args.limit]:
         print(f"{sig.ticker:<10} {sig.composite_score:>10.4f} {sig.decile:>8} {sig.rank:>8} {sig.confidence:>7.1%}")
 
-    print(f"\n📉 TOP {int(args.bottom_pct*100)}% SHORT CANDIDATES:")
+    print(f"\n TOP {int(args.bottom_pct*100)}% SHORT CANDIDATES:")
     print("-" * 70)
     print(f"{'Ticker':<10} {'Score':>10} {'Decile':>8} {'Rank':>8} {'Conf':>8}")
     print("-" * 70)
@@ -216,49 +216,49 @@ def cmd_cross_section(args):
 
     if args.output:
         rankings.to_csv(args.output)
-        print(f"\n💾 Rankings exported to: {args.output}")
+        print(f"\n Rankings exported to: {args.output}")
 
 
 def cmd_regime(args):
     """Detect market regime."""
     print("=" * 70)
-    print("🎯 MARKET REGIME DETECTION")
+    print(" MARKET REGIME DETECTION")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(args.universe)
 
-    print(f"\n🔍 Fitting HMM with {args.regimes} regimes...")
+    print(f"\n Fitting HMM with {args.regimes} regimes...")
     detector = RegimeDetector(returns)
     detector.fit_hmm(n_regimes=args.regimes)
 
     current = detector.detect_current_regime()
     allocation = detector.generate_regime_signals()
 
-    print(f"\n📊 CURRENT REGIME:")
+    print(f"\n CURRENT REGIME:")
     print(f"   Regime: {current.regime.value.replace('_', ' ').title()}")
     print(f"   Confidence: {current.probability:.1%}")
     print(f"   Volatility: {current.volatility:.2%}")
     print(f"   Trend: {current.trend:.4f}")
     print(f"   Description: {current.description}")
 
-    print(f"\n💼 ALLOCATION RECOMMENDATION:")
+    print(f"\n ALLOCATION RECOMMENDATION:")
     print(f"   Risk-on Score: {allocation.risk_on_score:.2f} (0=defensive, 1=aggressive)")
     print(f"   Defensive Tilt: {'Yes' if allocation.defensive_tilt else 'No'}")
     print(f"   Action: {allocation.recommended_action}")
 
-    print(f"\n📈 OPTIMAL FACTOR WEIGHTS:")
+    print(f"\n OPTIMAL FACTOR WEIGHTS:")
     for factor, weight in sorted(allocation.factor_weights.items(), key=lambda x: x[1], reverse=True):
-        bar = "█" * int(weight * 50)
+        bar = "" * int(weight * 50)
         print(f"   {factor:<15} {weight:>6.2%} {bar}")
 
     if args.predict:
-        print(f"\n🔮 REGIME PREDICTIONS (Next {args.predict} days):")
+        print(f"\n REGIME PREDICTIONS (Next {args.predict} days):")
         predictions = detector.predict_regime(duration=args.predict)
         for i, pred in enumerate(predictions, 1):
             print(f"   Day {i}: {pred.regime.value.replace('_', ' ').title()} (prob: {pred.probability:.1%})")
 
     if args.summary:
-        print("\n📋 REGIME STATISTICS:")
+        print("\n REGIME STATISTICS:")
         summary = detector.get_regime_summary()
         print(summary.to_string(index=False))
 
@@ -266,7 +266,7 @@ def cmd_regime(args):
 def cmd_backtest(args):
     """Backtest signal performance."""
     print("=" * 70)
-    print("📊 SIGNAL BACKTEST")
+    print(" SIGNAL BACKTEST")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(args.universe)
@@ -285,7 +285,7 @@ def cmd_backtest(args):
     # Get returns data for backtesting
     returns_data = returns  # Use factor returns as proxy
 
-    print(f"\n🔍 Running walk-forward backtest...")
+    print(f"\n Running walk-forward backtest...")
     print(f"   Train size: {args.train_size} days")
     print(f"   Test size: {args.test_size} days")
     print(f"   Walks: {args.walks}")
@@ -300,7 +300,7 @@ def cmd_backtest(args):
             min_confidence=args.confidence
         )
 
-        print(f"\n📈 BACKTEST RESULTS:")
+        print(f"\n BACKTEST RESULTS:")
         print(f"   Total Return: {results['total_return']:.2%}")
         print(f"   Annualized Return: {results['annualized_return']:.2%}")
         print(f"   Volatility: {results['volatility']:.2%}")
@@ -312,7 +312,7 @@ def cmd_backtest(args):
         print(f"   Number of Trades: {results['num_trades']}")
 
         if args.optimize:
-            print(f"\n🔧 OPTIMIZING THRESHOLDS...")
+            print(f"\n OPTIMIZING THRESHOLDS...")
             optimal = backtester.optimize_thresholds(
                 metric=args.metric,
                 n_steps=args.steps
@@ -325,14 +325,14 @@ def cmd_backtest(args):
             print("\n" + report)
 
     except Exception as e:
-        print(f"❌ Backtest failed: {e}")
+        print(f" Backtest failed: {e}")
 
 
 def cmd_dashboard(args):
     """Launch Streamlit dashboard."""
     import subprocess
 
-    print("🚀 Launching Streamlit dashboard...")
+    print(" Launching Streamlit dashboard...")
     print("   URL: http://localhost:8501")
     print("   Press Ctrl+C to stop")
     print("-" * 70)
@@ -344,7 +344,7 @@ def cmd_dashboard(args):
 def cmd_report(args):
     """Generate HTML report."""
     print("=" * 70)
-    print("📄 GENERATING SIGNAL REPORT")
+    print(" GENERATING SIGNAL REPORT")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(args.universe)
@@ -352,7 +352,7 @@ def cmd_report(args):
     output_path = args.output or f"signal_report_{datetime.now().strftime('%Y-%m-%d')}.html"
 
     generate_signal_report(returns, loadings, output_path)
-    print(f"\n💾 Report saved to: {output_path}")
+    print(f"\n Report saved to: {output_path}")
 
     if args.open:
         import webbrowser
@@ -362,7 +362,7 @@ def cmd_report(args):
 def cmd_export(args):
     """Export signals to CSV."""
     print("=" * 70)
-    print("💾 EXPORTING SIGNALS")
+    print(" EXPORTING SIGNALS")
     print("=" * 70)
 
     frs, returns, loadings = load_or_generate_factors(args.universe)
@@ -370,11 +370,11 @@ def cmd_export(args):
     output_path = args.output or f"signals_{datetime.now().strftime('%Y-%m-%d')}.csv"
 
     frs.export_signals(output_path)
-    print(f"\n✅ Signals exported to: {output_path}")
+    print(f"\n Signals exported to: {output_path}")
 
     # Also print summary
     signals = frs.get_trading_signals()
-    print(f"\n📊 Export Summary:")
+    print(f"\n Export Summary:")
     print(f"   Factors: {len(signals['momentum_signals'])}")
     print(f"   Extreme Alerts: {len(signals['extreme_alerts'])}")
     print(f"   Cross-sectional Signals: {len(signals['cross_sectional_signals'])}")
@@ -383,17 +383,17 @@ def cmd_export(args):
 def cmd_name_factors(args):
     """Interactive factor naming command."""
     print("=" * 70)
-    print("🏷️  FACTOR NAMING")
+    print("  FACTOR NAMING")
     print("=" * 70)
 
     # Check API key
     if not validate_api_key():
-        print("\n❌ Error: OpenAI API key not available or invalid")
+        print("\n Error: OpenAI API key not available or invalid")
         print("   Set OPENAI_API_KEY environment variable")
         sys.exit(1)
 
     # Load or generate factors
-    print(f"\n🔍 Loading factor data for universe: {', '.join(args.universe)}")
+    print(f"\n Loading factor data for universe: {', '.join(args.universe)}")
     frs, returns, loadings = load_or_generate_factors(
         args.universe,
         method=args.method,
@@ -413,7 +413,7 @@ def cmd_name_factors(args):
             data = json.load(f)
             for code, name_data in data.get('factors', {}).items():
                 existing_names[code] = FactorName.from_dict(name_data)
-        print(f"\n📂 Loaded {len(existing_names)} cached names")
+        print(f"\n Loaded {len(existing_names)} cached names")
 
     # Determine which factors to name
     if args.factor:
@@ -421,7 +421,7 @@ def cmd_name_factors(args):
     else:
         factors_to_name = [c for c in loadings.columns if c not in existing_names or args.regenerate]
 
-    print(f"\n🎯 Naming {len(factors_to_name)} factors...")
+    print(f"\n Naming {len(factors_to_name)} factors...")
 
     # Generate names with full enrichment (style attribution + sector exposure)
     from .factor_labeler import batch_name_factors
@@ -439,7 +439,7 @@ def cmd_name_factors(args):
     # Interactive review mode
     if args.interactive or args.review:
         print("\n" + "=" * 70)
-        print("📋 REVIEW GENERATED NAMES")
+        print(" REVIEW GENERATED NAMES")
         print("=" * 70)
 
         for code, name in sorted(all_names.items()):
@@ -457,7 +457,7 @@ def cmd_name_factors(args):
 
             issues = validate_name(name)
             if issues:
-                print(f"   ⚠ Issues: {', '.join(issues)}")
+                print(f"    Issues: {', '.join(issues)}")
 
             if args.interactive:
                 action = input("\n   [a]pprove, [e]dit, [s]kip, [q]uit? ").lower().strip()
@@ -479,7 +479,7 @@ def cmd_name_factors(args):
 
                 if action == 'a':
                     name.approved = True
-                    print("   ✓ Approved")
+                    print("    Approved")
 
     # Generate quality report
     print("\n" + generate_quality_report(all_names))
@@ -493,7 +493,7 @@ def cmd_name_factors(args):
 
     with open(cache_file, 'w') as f:
         json.dump(cache_data, f, indent=2)
-    print(f"\n💾 Saved {len(all_names)} names to {cache_file}")
+    print(f"\n Saved {len(all_names)} names to {cache_file}")
 
     # Export to CSV for easy viewing
     csv_file = args.output or "factor_names.csv"
@@ -511,7 +511,7 @@ def cmd_name_factors(args):
         })
 
     pd.DataFrame(df_data).to_csv(csv_file, index=False)
-    print(f"💾 Exported to {csv_file}")
+    print(f" Exported to {csv_file}")
 
 
 def main():

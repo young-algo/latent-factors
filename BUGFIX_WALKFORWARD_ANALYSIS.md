@@ -62,9 +62,9 @@ This calculates:
 ### Verification
 
 After fix on same test data:
-- Daily Mean: -0.14% ✅
-- Daily Vol: 1.86% ✅  
-- Range: -3.6% to +4.9% ✅
+- Daily Mean: -0.14% 
+- Daily Vol: 1.86%   
+- Range: -3.6% to +4.9% 
 - These are realistic daily factor portfolio returns
 
 ---

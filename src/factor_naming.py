@@ -614,11 +614,11 @@ Respond with JSON:
 }
 
 NAMING RULES:
-✗ AVOID: "Beta Factor", "Dynamic Mix", "Balanced Exposure", ticker-based names like "AAPL Factor"
-✗ AVOID: Generic terms: "Factor", "Dynamic", "Composite", "Multi", "Systematic"
-✓ USE: Specific themes: "Unprofitable Tech", "Dividend Aristocrats", "Quality Growth"
-✓ USE: Contrast patterns: "Growth vs Value", "Large vs Small", "Cyclical vs Defensive"
-✓ USE: Hedge fund language: "High Beta Junk", "Momentum Winners", "Deep Value Traps\"""")
+ AVOID: "Beta Factor", "Dynamic Mix", "Balanced Exposure", ticker-based names like "AAPL Factor"
+ AVOID: Generic terms: "Factor", "Dynamic", "Composite", "Multi", "Systematic"
+ USE: Specific themes: "Unprofitable Tech", "Dividend Aristocrats", "Quality Growth"
+ USE: Contrast patterns: "Growth vs Value", "Large vs Small", "Cyclical vs Defensive"
+ USE: Hedge fund language: "High Beta Junk", "Momentum Winners", "Deep Value Traps\"""")
 
     return "\n".join(sections)
 
@@ -696,14 +696,14 @@ def generate_quality_report(factors: Dict[str, FactorName]) -> str:
         if issues:
             lines.append("  Issues:")
             for issue in issues:
-                lines.append(f"    ⚠ {issue}")
+                lines.append(f"     {issue}")
         else:
-            lines.append("  ✓ No validation issues")
+            lines.append("   No validation issues")
 
         if name.approved:
-            lines.append("  ✓ Human approved")
+            lines.append("   Human approved")
         elif name.edited:
-            lines.append("  ✎ Human edited (pending approval)")
+            lines.append("   Human edited (pending approval)")
 
     # Summary statistics
     scores = [f.quality_score for f in factors.values()]

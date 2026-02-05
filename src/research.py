@@ -470,7 +470,7 @@ class FactorResearchSystem(DataBackend):
         
         >>> # Check fitting success
         >>> if frs._factors is not None:
-        ...     print("✅ Factor fitting completed successfully")
+        ...     print(" Factor fitting completed successfully")
         ...     factor_names = frs.name_factors()
         
         Notes
@@ -822,19 +822,19 @@ class FactorResearchSystem(DataBackend):
         - Results are cached in self.universe attribute
         - Validation prevents downstream data errors
         """
-        print(f"📋 Resolving {len(symbols)} symbols (ETF expansion: {self.expand_etfs})...")
+        print(f" Resolving {len(symbols)} symbols (ETF expansion: {self.expand_etfs})...")
         
         tickers: List[str] = []
         
         for i, s in enumerate(symbols, 1):
-            print(f"🔍 Processing symbol {i}/{len(symbols)}: {s}")
+            print(f" Processing symbol {i}/{len(symbols)}: {s}")
             
             if self.expand_etfs and self.is_etf(s):
-                print(f"📈 Detected ETF {s}, fetching holdings...")
+                print(f" Detected ETF {s}, fetching holdings...")
                 
                 holds = self.get_etf_holdings(s)
                 if holds.empty:
-                    print(f"⚠️ No holdings found for ETF {s} – skipping")
+                    print(f" No holdings found for ETF {s} – skipping")
                     continue
                     
                 # Filter out invalid tickers
@@ -845,13 +845,13 @@ class FactorResearchSystem(DataBackend):
                     and str(ticker).replace(".", "").replace("-", "").isalnum()  # Basic validation
                 ]
                 tickers.extend(valid_constituents)
-                print(f"✅ ETF {s} expanded to {len(valid_constituents)} valid constituents (filtered from {len(holds)} total)")
+                print(f" ETF {s} expanded to {len(valid_constituents)} valid constituents (filtered from {len(holds)} total)")
             else:
                 tickers.append(s)
-                print(f"✅ Added regular symbol: {s}")
+                print(f" Added regular symbol: {s}")
         
         unique_tickers = sorted(set(tickers))
-        print(f"🎉 Symbol resolution complete: {len(unique_tickers)} unique tickers from {len(symbols)} input symbols")
+        print(f" Symbol resolution complete: {len(unique_tickers)} unique tickers from {len(symbols)} input symbols")
         return unique_tickers
 
     # ========================================================= #
@@ -923,7 +923,7 @@ class FactorResearchSystem(DataBackend):
         >>> 
         >>> # Verify delisted stocks are included
         >>> if 'LEH' in tickers:
-        ...     print("✓ PIT universe correctly includes Lehman Brothers")
+        ...     print(" PIT universe correctly includes Lehman Brothers")
         >>> 
         >>> # Use in backtest loop
         >>> for date in backtest_dates:
@@ -1040,9 +1040,9 @@ class FactorResearchSystem(DataBackend):
         >>> # Test Lehman Brothers
         >>> result = frs.verify_pit_universe('2008-09-15', ['LEH'])
         >>> if result['pass']:
-        ...     print("✓ PIT universe correctly includes LEH")
+        ...     print(" PIT universe correctly includes LEH")
         ... else:
-        ...     print(f"✗ Missing: {result['missing']}")
+        ...     print(f" Missing: {result['missing']}")
         >>> 
         >>> # Test Silicon Valley Bank
         >>> result = frs.verify_pit_universe('2023-01-01', ['SIVB'])
@@ -1067,12 +1067,12 @@ class FactorResearchSystem(DataBackend):
         
         if result['pass']:
             _LOGGER.info(
-                f"✓ PIT verification passed for {date_str}: "
+                f" PIT verification passed for {date_str}: "
                 f"all {len(expected_delisted)} expected tickers found"
             )
         else:
             _LOGGER.error(
-                f"✗ PIT verification FAILED for {date_str}: "
+                f" PIT verification FAILED for {date_str}: "
                 f"missing {missing}"
             )
         
@@ -1091,8 +1091,8 @@ class FactorResearchSystem(DataBackend):
         ]
         fnd = self.get_fundamentals(self.universe, fields=f_fields)
         
-        print(f"📊 Fundamentals data shape: {fnd.shape}")
-        print(f"📊 Data types: {fnd.dtypes.to_dict()}")
+        print(f" Fundamentals data shape: {fnd.shape}")
+        print(f" Data types: {fnd.dtypes.to_dict()}")
         
         # Convert numeric columns and handle mixed types
         numeric_cols = ["PriceToSalesRatioTTM", "PriceToBookRatio", "ForwardPE", "ProfitMargin", 
@@ -1101,7 +1101,7 @@ class FactorResearchSystem(DataBackend):
         for col in numeric_cols:
             if col in fnd.columns:
                 fnd[col] = pd.to_numeric(fnd[col], errors='coerce')
-                print(f"📊 {col}: {fnd[col].notna().sum()}/{len(fnd)} valid values")
+                print(f" {col}: {fnd[col].notna().sum()}/{len(fnd)} valid values")
 
         cat = pd.get_dummies(fnd[["Sector", "Industry"]],
                              dummy_na=False, prefix_sep="=")
@@ -1116,25 +1116,25 @@ class FactorResearchSystem(DataBackend):
         
         if len(valid_fundamental) > 10:  # Need at least 10 stocks with fundamental data
             fundamental_factors.append(_z(fnd[fundamental_cols]))
-            print(f"✅ Added fundamental factors: {len(valid_fundamental)} stocks with data")
+            print(f" Added fundamental factors: {len(valid_fundamental)} stocks with data")
         else:
-            print(f"⚠️ Insufficient fundamental data ({len(valid_fundamental)} stocks), skipping fundamental factors")
+            print(f" Insufficient fundamental data ({len(valid_fundamental)} stocks), skipping fundamental factors")
         
         # Add size factor if market cap data exists
         mkt_cap_data = fnd[["MarketCapitalization"]].replace(0, np.nan).dropna()
         if len(mkt_cap_data) > 10:
             log_mkt_cap = np.log(fnd[["MarketCapitalization"]].replace(0, np.nan))
             fundamental_factors.append(_z(log_mkt_cap))
-            print(f"✅ Added size factor: {len(mkt_cap_data)} stocks with market cap data")
+            print(f" Added size factor: {len(mkt_cap_data)} stocks with market cap data")
         else:
-            print(f"⚠️ Insufficient market cap data ({len(mkt_cap_data)} stocks), skipping size factor")
+            print(f" Insufficient market cap data ({len(mkt_cap_data)} stocks), skipping size factor")
         
         # Add sector/industry dummies if we have enough diversity
         if len(cat.columns) > 1:  # More than just one sector/industry
             fundamental_factors.append(cat)
-            print(f"✅ Added sector/industry factors: {len(cat.columns)} categories")
+            print(f" Added sector/industry factors: {len(cat.columns)} categories")
         else:
-            print(f"⚠️ Insufficient sector/industry diversity, skipping categorical factors")
+            print(f" Insufficient sector/industry diversity, skipping categorical factors")
         
         if not fundamental_factors:
             raise RuntimeError("No valid fundamental factors could be built - check data quality")
@@ -1142,9 +1142,9 @@ class FactorResearchSystem(DataBackend):
         desc = pd.concat(fundamental_factors, axis=1)
         
         # Debug the fundamental factors
-        print(f"📊 Combined factors shape: {desc.shape}")
-        print(f"📊 NaN counts: {desc.isnull().sum().sum()} total NaNs")
-        print(f"📊 Infinite values: {np.isinf(desc.select_dtypes(include=[np.number])).sum().sum()} total infs")
+        print(f" Combined factors shape: {desc.shape}")
+        print(f" NaN counts: {desc.isnull().sum().sum()} total NaNs")
+        print(f" Infinite values: {np.isinf(desc.select_dtypes(include=[np.number])).sum().sum()} total infs")
         
         # Create derived factors safely
         if "PriceToSalesRatioTTM" in desc.columns:
@@ -1158,9 +1158,9 @@ class FactorResearchSystem(DataBackend):
         }, inplace=True, errors='ignore')
         
         # Final validation
-        print(f"📊 Final desc shape: {desc.shape}")
-        print(f"📊 Final NaN counts: {desc.isnull().sum().sum()}")
-        print(f"📊 Final inf counts: {np.isinf(desc.select_dtypes(include=[np.number])).sum().sum()}")
+        print(f" Final desc shape: {desc.shape}")
+        print(f" Final NaN counts: {desc.isnull().sum().sum()}")
+        print(f" Final inf counts: {np.isinf(desc.select_dtypes(include=[np.number])).sum().sum()}")
 
         rets = np.log(px).diff()
         mom_21 = px.pct_change(21)
@@ -1256,7 +1256,7 @@ class FactorResearchSystem(DataBackend):
                 continue
         
         if failed_dates:
-            print(f"⚠️ Skipped {len(failed_dates)} dates with insufficient data")
+            print(f" Skipped {len(failed_dates)} dates with insufficient data")
             
         if not facs:
             raise RuntimeError("Could not compute factors for any dates - check data quality")
