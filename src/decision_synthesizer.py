@@ -65,3 +65,25 @@ class SignalState:
     extremes_detected: List[ExtremeReading]
     cross_sectional_spread: float  # std devs
     meta_model_prediction: Optional[float] = None
+
+
+@dataclass
+class TradeExpression:
+    """A specific way to express a trade idea."""
+    description: str  # "Simple", "Targeted", "ETF proxy"
+    trade: str  # "Buy QQQ" or "NVDA, MSFT, AAPL"
+    size_pct: float  # Position size as fraction of portfolio
+
+
+@dataclass
+class Recommendation:
+    """A complete actionable recommendation."""
+    action: str
+    conviction: ConvictionLevel
+    conviction_score: float  # 0-10
+    category: ActionCategory
+    reasons: List[str]
+    conflicts: List[str]
+    expressions: List[TradeExpression]
+    exit_trigger: str
+    sizing_rationale: str = ""
