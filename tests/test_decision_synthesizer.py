@@ -7,7 +7,8 @@ from datetime import datetime
 
 from src.decision_synthesizer import (
     SignalState, RegimeState, FactorMomentum,
-    Recommendation, TradeExpression, ConvictionLevel, ActionCategory
+    Recommendation, TradeExpression, ConvictionLevel, ActionCategory,
+    ConvictionScorer
 )
 
 
@@ -70,3 +71,49 @@ class TestRecommendation:
         assert rec.category == ActionCategory.OPPORTUNISTIC
         assert len(rec.reasons) == 3
         assert len(rec.expressions) == 2
+
+
+class TestConvictionScoring:
+    """Tests for conviction scoring logic."""
+
+    def test_high_conviction_all_aligned(self):
+        """All signals aligned should produce HIGH conviction."""
+        scorer = ConvictionScorer()
+
+        score = scorer.calculate(
+            signal_strength=1.8,  # z-score
+            signal_agreement=3,   # 3 of 3 signals agree
+            total_signals=3,
+            regime_fit=True
+        )
+
+        assert score >= 8.0
+        assert scorer.to_level(score) == ConvictionLevel.HIGH
+
+    def test_low_conviction_conflicting(self):
+        """Conflicting signals should produce LOW or CONFLICTED."""
+        scorer = ConvictionScorer()
+
+        score = scorer.calculate(
+            signal_strength=1.5,
+            signal_agreement=1,  # Only 1 of 3 agree
+            total_signals=3,
+            regime_fit=False
+        )
+
+        assert score < 5.0
+        assert scorer.to_level(score) in [ConvictionLevel.LOW, ConvictionLevel.CONFLICTED]
+
+    def test_medium_conviction_partial_agreement(self):
+        """Partial agreement should produce MEDIUM conviction."""
+        scorer = ConvictionScorer()
+
+        score = scorer.calculate(
+            signal_strength=1.2,
+            signal_agreement=2,  # 2 of 3 agree
+            total_signals=3,
+            regime_fit=True
+        )
+
+        assert 5.0 <= score < 8.0
+        assert scorer.to_level(score) == ConvictionLevel.MEDIUM
