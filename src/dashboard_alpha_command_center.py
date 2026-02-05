@@ -1216,10 +1216,11 @@ def render_factor_lab(data: dict, analyzers: dict):
                         active_factors = [f for f in returns.columns if f in loadings.columns]
                         active_loadings = loadings[active_factors]
                         
-                        # Call batch processing
+                        # Call batch processing with full enrichment
                         llm_names_map = batch_name_factors(
                             factor_exposures=active_loadings,
                             fundamentals=fundamentals_all,
+                            factor_returns=returns[active_factors],
                             top_n=10,
                             model=config.OPENAI_MODEL
                         )
@@ -1485,12 +1486,17 @@ def render_factor_lab(data: dict, analyzers: dict):
                             with st.expander("📤 View Enriched LLM Prompt (includes style attribution + sector exposure)"):
                                 st.code(enriched_prompt, language="text")
                             
-                            # Step 3: Call LLM with centralized logic
+                            # Step 3: Call LLM with centralized logic and enrichment data
                             result_obj = ask_llm(
                                 factor_id=selected_factor,
                                 top_pos=top_pos.head(10).index.tolist(),
                                 top_neg=top_neg.head(10).index.tolist(),
                                 fundamentals=fundamentals,
+                                # Pass returns data for style attribution
+                                factor_returns=returns[selected_factor] if selected_factor in returns.columns else None,
+                                all_returns=returns,
+                                # Pass loadings for enriched stock profiles
+                                loadings=loadings[selected_factor] if selected_factor in loadings.columns else None,
                                 model=config.OPENAI_MODEL
                             )
                             

@@ -64,7 +64,7 @@ Requirements
 -----------
 - **Environment**: OPENAI_API_KEY environment variable
 - **API Access**: OpenAI API account with sufficient credits
-- **Models**: Compatible with gpt-5-mini, gpt-5.2, gpt-5.2-pro
+- **Models**: Compatible with gpt-4o-mini, gpt-4o, gpt-5, gpt-5.1, gpt-5.2
 - **Data**: Fundamental data with sector, market cap, financial ratios
 
 Performance Characteristics
@@ -103,7 +103,9 @@ from dotenv import load_dotenv
 
 from .factor_naming import (
     FactorName, generate_name_prompt, parse_name_response,
-    validate_name, score_quality, detect_tags, generate_quality_report
+    validate_name, score_quality, detect_tags, generate_quality_report,
+    calculate_style_attribution, calculate_sector_exposure_from_fundamentals,
+    analyze_factor_characteristics
 )
 
 # Load environment variables from .env file
@@ -235,8 +237,12 @@ def ask_llm(factor_id: str,
             fundamentals: pd.DataFrame,
             sector_analysis: Optional[Dict] = None,
             existing_names: Optional[List[str]] = None,
+            # New enrichment parameters
+            factor_returns: pd.Series = None,
+            all_returns: pd.DataFrame = None,
+            loadings: pd.Series = None,
             temperature: float = 0.4,
-            max_tokens: int = 200,
+            max_completion_tokens: int = 2000,
             model: str = "gpt-5-mini",
             max_retries: int = 3) -> FactorName:
     """
@@ -253,15 +259,23 @@ def ask_llm(factor_id: str,
     fundamentals : pd.DataFrame
         Fundamental data for context
     sector_analysis : Optional[Dict]
-        Sector composition analysis
+        Sector composition analysis (legacy, used if no enrichment data)
     existing_names : Optional[List[str]]
         Other factor names to avoid similarity with
+    factor_returns : pd.Series, optional
+        Time series of returns for this factor (for style attribution)
+    all_returns : pd.DataFrame, optional
+        All factor returns (for style attribution correlation)
+    loadings : pd.Series, optional
+        Full factor loadings for enriched stock profiles
     temperature : float, default 0.4
         LLM temperature parameter (lower for more consistent output)
-    max_tokens : int, default 200
+    max_completion_tokens : int, default 2000
         Maximum tokens in response (JSON needs more space)
     model : str, default "gpt-5-mini"
-        OpenAI model to use
+        OpenAI model to use for factor naming.
+        Recommended: "gpt-5-mini" (Base), "gpt-5.2" (Advanced).
+        Note: GPT-5 models are reasoning models and do not support temperature.
     max_retries : int, default 3
         Maximum retry attempts for API calls
 
@@ -289,16 +303,34 @@ def ask_llm(factor_id: str,
 
     try:
         # Build sector analysis from fundamentals if not provided
-        if sector_analysis is None and not fundamentals.empty:
+        if sector_analysis is None and fundamentals is not None and not fundamentals.empty:
             sector_analysis = _build_sector_analysis(top_pos, top_neg, fundamentals)
 
-        # Generate structured prompt
+        # Calculate enrichment data if returns are provided
+        style_attribution = None
+        sector_exposure = None
+        factor_stats = None
+
+        if factor_returns is not None and all_returns is not None:
+            style_attribution = calculate_style_attribution(factor_returns, all_returns)
+
+        if loadings is not None and fundamentals is not None and not fundamentals.empty:
+            sector_exposure = calculate_sector_exposure_from_fundamentals(loadings, fundamentals)
+            factor_stats = analyze_factor_characteristics(loadings)
+
+        # Generate structured prompt with enrichment
         prompt = generate_name_prompt(
             factor_code=factor_id,
             top_stocks=list(top_pos[:10]),
             bottom_stocks=list(top_neg[:10]),
             sector_analysis=sector_analysis,
-            existing_names=existing_names
+            existing_names=existing_names,
+            # Enrichment parameters
+            fundamentals=fundamentals,
+            loadings=loadings,
+            style_attribution=style_attribution,
+            sector_exposure=sector_exposure,
+            factor_stats=factor_stats
         )
 
         # Retry logic with exponential backoff
@@ -314,17 +346,35 @@ def ask_llm(factor_id: str,
                     _LOG.info("Retrying after %d seconds...", delay)
                     time.sleep(delay)
 
-                rsp = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a quantitative finance expert. Respond only with valid JSON."},
+                # Build API parameters - gpt-5 and gpt-4o models don't support temperature parameter
+                api_params = {
+                    "model": model,
+                    "messages": [
+                        {"role": "developer", "content": "You are a quantitative finance expert. Respond only with valid JSON."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=30,
-                    response_format={"type": "json_object"}  # Enforce JSON output
-                )
+                    "max_completion_tokens": max_completion_tokens,
+                    "timeout": 30,
+                    "response_format": {"type": "json_object"}  # Enforce JSON output
+                }
+                
+                # Model-specific parameter handling
+                # All gpt-5 variants (including mini) and o-series are reasoning models
+                is_reasoning_model = model.startswith(("o1", "o3", "gpt-5"))
+                
+                if is_reasoning_model:
+                     # Reasoning models (gpt-5, o1) do not support temperature/top_p 
+                     # unless reasoning_effort is set (which we are not setting here yet).
+                     # Safe default: omit temperature.
+                     pass
+                else:
+                    # Standard models (gpt-4o, gpt-4-turbo, gpt-3.5) support temperature
+                    api_params["temperature"] = temperature
+                
+                # Override for specific models that might not support json_object (rare now, but o1-preview didn't initially)
+                # Assuming modern o1/gpt-5 supports it. If not, catching the error below.
+                
+                rsp = client.chat.completions.create(**api_params)
 
                 # Validate response
                 if not rsp.choices or not rsp.choices[0].message.content:
@@ -451,6 +501,7 @@ def _generate_fallback_name(factor_id: str,
 
 def batch_name_factors(factor_exposures: pd.DataFrame,
                       fundamentals: pd.DataFrame,
+                      factor_returns: pd.DataFrame = None,
                       top_n: int = 10,
                       **llm_kwargs) -> Dict[str, FactorName]:
     """
@@ -462,6 +513,8 @@ def batch_name_factors(factor_exposures: pd.DataFrame,
         Factor exposures matrix (tickers x factors)
     fundamentals : pd.DataFrame
         Fundamental data for context
+    factor_returns : pd.DataFrame, optional
+        Factor returns matrix (dates x factors) for style attribution
     top_n : int, default 10
         Number of top/bottom stocks to consider
     **llm_kwargs
@@ -493,11 +546,21 @@ def batch_name_factors(factor_exposures: pd.DataFrame,
             # Build sector analysis
             sector_analysis = _build_sector_analysis(top_pos, top_neg, fundamentals)
 
-            # Generate name with distinctiveness context
+            # Get factor returns for style attribution if available
+            single_factor_returns = None
+            if factor_returns is not None and factor_id in factor_returns.columns:
+                single_factor_returns = factor_returns[factor_id]
+
+            # Generate name with full enrichment
             factor_name = ask_llm(
                 factor_id, top_pos, top_neg, fundamentals,
                 sector_analysis=sector_analysis,
                 existing_names=named_so_far.copy(),
+                # Pass returns data for style attribution
+                factor_returns=single_factor_returns,
+                all_returns=factor_returns,
+                # Pass loadings for enriched stock profiles
+                loadings=exposures,
                 **llm_kwargs
             )
 
@@ -541,7 +604,7 @@ def validate_api_key() -> bool:
         test_client.chat.completions.create(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "test"}],
-            max_tokens=1
+            max_completion_tokens=100
         )
         return True
     except Exception as e:

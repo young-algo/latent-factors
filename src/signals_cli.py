@@ -423,11 +423,12 @@ def cmd_name_factors(args):
 
     print(f"\n🎯 Naming {len(factors_to_name)} factors...")
 
-    # Generate names
+    # Generate names with full enrichment (style attribution + sector exposure)
     from .factor_labeler import batch_name_factors
     new_names = batch_name_factors(
         loadings[factors_to_name],
         fundamentals,
+        factor_returns=returns[factors_to_name] if not returns.empty else None,
         top_n=args.top_n,
         model=args.model
     )
@@ -600,7 +601,7 @@ Examples:
     name_parser.add_argument('--components', type=int, default=8, help='Number of factors')
     name_parser.add_argument('--no-expand', dest='expand_etfs', action='store_false', help='Disable ETF expansion')
     name_parser.add_argument('-f', '--factor', help='Name specific factor only')
-    name_parser.add_argument('--model', default='gpt-5-mini', help='OpenAI model to use')
+    name_parser.add_argument('--model', default='gpt-5-mini', help='OpenAI model to use (e.g., gpt-5-mini, gpt-5, gpt-5.2, gpt-4o-mini)')
     name_parser.add_argument('--top-n', type=int, default=10, help='Number of stocks to show')
     name_parser.add_argument('--interactive', '-i', action='store_true', help='Interactive approval mode')
     name_parser.add_argument('--review', '-r', action='store_true', help='Review all names')

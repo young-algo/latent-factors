@@ -5,11 +5,14 @@ Provides standardized naming with validation, quality scoring, and formatting.
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Sequence
 from datetime import datetime
 import json
 import re
 from difflib import SequenceMatcher
+
+import pandas as pd
+import numpy as np
 
 
 @dataclass
@@ -23,6 +26,7 @@ class FactorName:
         high_exposure_desc: What high-exposure stocks have in common
         low_exposure_desc: What low-exposure stocks have in common
         confidence: high, medium, or low
+        rationale: Detailed reasoning for the name choice
         tags: List of category tags (e.g., ["sector", "value_growth"])
         quality_score: Computed quality score (0-100)
         approved: Whether name has been human-approved
@@ -36,6 +40,7 @@ class FactorName:
     high_exposure_desc: str = ""
     low_exposure_desc: str = ""
     confidence: str = "medium"
+    rationale: str = ""
     tags: List[str] = field(default_factory=list)
     quality_score: float = 0.0
     approved: bool = False
@@ -244,68 +249,378 @@ def detect_tags(name: FactorName) -> List[str]:
     return tags
 
 
-def generate_name_prompt(factor_code: str, top_stocks: List[str],
-                         bottom_stocks: List[str],
-                         sector_analysis: Dict[str, Any],
-                         existing_names: List[str] = None) -> str:
+# =============================================================================
+# Enrichment Helper Functions
+# =============================================================================
+
+def calculate_style_attribution(
+    factor_returns: pd.Series,
+    all_returns: pd.DataFrame
+) -> Dict[str, float]:
+    """Regress factor against style proxies and return attribution.
+
+    Uses the first few factors as proxies for known risk factors:
+    F1 ~ Market, F2 ~ Value/Growth, F3 ~ Momentum, etc.
+
+    Args:
+        factor_returns: Time series of returns for this factor
+        all_returns: DataFrame of all factor returns
+
+    Returns:
+        Dictionary mapping style names to attribution weights
+    """
+    styles = {}
+
+    if all_returns is None or len(all_returns.columns) < 4:
+        return {'Idiosyncratic': 1.0}
+
+    style_names = ['Market', 'Value', 'Momentum', 'Size', 'Quality']
+
+    for i, style in enumerate(style_names[:min(5, len(all_returns.columns))]):
+        if all_returns.columns[i] != factor_returns.name:
+            corr = factor_returns.corr(all_returns.iloc[:, i])
+            if not np.isnan(corr):
+                styles[style] = abs(corr)
+
+    # Normalize
+    total = sum(styles.values())
+    if total > 0:
+        styles = {k: v/total for k, v in styles.items()}
+
+    # Calculate idiosyncratic
+    styles['Idiosyncratic'] = max(0, 1 - sum(styles.values()))
+
+    return styles
+
+
+def calculate_sector_exposure_from_fundamentals(
+    loadings: pd.Series,
+    fundamentals: pd.DataFrame
+) -> Dict[str, float]:
+    """Calculate actual sector exposure weighted by factor loadings.
+
+    Weights each stock's sector by its factor loading to get net exposure.
+    Positive loadings contribute positively, negative loadings negatively.
+
+    Args:
+        loadings: Factor loadings series (ticker -> loading)
+        fundamentals: DataFrame with 'Sector' column, indexed by ticker
+
+    Returns:
+        Dictionary mapping sectors to net exposure weights
+    """
+    if fundamentals is None or fundamentals.empty or 'Sector' not in fundamentals.columns:
+        return {}
+
+    sector_exposure = {}
+
+    for ticker in loadings.index:
+        if ticker in fundamentals.index:
+            sector = fundamentals.loc[ticker].get('Sector')
+            if sector and not pd.isna(sector):
+                # Use signed loading for net exposure
+                loading = loadings[ticker]
+                sector_exposure[sector] = sector_exposure.get(sector, 0) + loading
+
+    # Sort by absolute exposure
+    return dict(sorted(sector_exposure.items(), key=lambda x: abs(x[1]), reverse=True))
+
+
+def analyze_factor_characteristics(loadings: pd.Series) -> Dict[str, Any]:
+    """Deep analysis of factor characteristics for naming.
+
+    Args:
+        loadings: Factor loadings series
+
+    Returns:
+        Dictionary with structural statistics about the factor
+    """
+    if loadings is None or loadings.empty:
+        return {}
+
+    pos_count = (loadings > 0).sum()
+    neg_count = (loadings < 0).sum()
+
+    pos_95 = loadings[loadings > 0].quantile(0.95) if pos_count > 0 else 0
+    neg_5 = loadings[loadings < 0].quantile(0.05) if neg_count > 0 else 0
+
+    # Calculate concentration (Herfindahl index)
+    loadings_abs = loadings.abs()
+    total = loadings_abs.sum()
+    if total > 0:
+        hhi = ((loadings_abs / total) ** 2).sum()
+    else:
+        hhi = 0
+
+    return {
+        'pos_count': int(pos_count),
+        'neg_count': int(neg_count),
+        'pos_95': float(pos_95),
+        'neg_5': float(neg_5),
+        'concentration': float(hhi),
+        'skew': float(loadings.skew()) if len(loadings) > 2 else 0,
+        'dispersion': float(pos_95 - neg_5)
+    }
+
+
+def format_stock_profile(
+    ticker: str,
+    loading: float,
+    fundamentals: pd.DataFrame
+) -> str:
+    """Format a single stock's profile for the LLM prompt.
+
+    Args:
+        ticker: Stock ticker symbol
+        loading: Factor loading for this stock
+        fundamentals: DataFrame with fundamental data, indexed by ticker
+
+    Returns:
+        Formatted string with stock profile
+    """
+    profile = f"  - {ticker} (loading: {loading:.3f})"
+
+    if fundamentals is None or fundamentals.empty or ticker not in fundamentals.index:
+        return profile
+
+    f = fundamentals.loc[ticker]
+
+    # Company name and sector
+    name = f.get('Name', '')
+    sector = f.get('Sector', '')
+    if name and not pd.isna(name):
+        profile += f"\n      Company: {name}"
+    if sector and not pd.isna(sector):
+        industry = f.get('Industry', '')
+        if industry and not pd.isna(industry):
+            profile += f" | Sector: {sector} / {industry}"
+        else:
+            profile += f" | Sector: {sector}"
+
+    # Market cap
+    mcap = f.get('MarketCapitalization')
+    if mcap and not pd.isna(mcap):
+        try:
+            mcap = float(mcap)
+            if mcap > 1e12:
+                profile += f"\n      Market Cap: ${mcap/1e12:.1f}T"
+            elif mcap > 1e9:
+                profile += f"\n      Market Cap: ${mcap/1e9:.1f}B"
+            else:
+                profile += f"\n      Market Cap: ${mcap/1e6:.0f}M"
+        except (ValueError, TypeError):
+            pass
+
+    # Valuation metrics
+    valuations = []
+    for metric, label in [('PERatio', 'P/E'), ('PriceToBookRatio', 'P/B'),
+                          ('PriceToSalesRatioTTM', 'P/S')]:
+        val = f.get(metric)
+        if val and not pd.isna(val):
+            try:
+                val = float(val)
+                if val > 0:
+                    valuations.append(f"{label}: {val:.1f}")
+            except (ValueError, TypeError):
+                pass
+    if valuations:
+        profile += f"\n      Valuation: {', '.join(valuations)}"
+
+    # Profitability
+    profitability = []
+    roe = f.get('ROE') or f.get('ReturnOnEquityTTM')
+    margin = f.get('ProfitMargin')
+    if roe and not pd.isna(roe):
+        try:
+            roe = float(roe)
+            profitability.append(f"ROE: {roe*100:.1f}%")
+        except (ValueError, TypeError):
+            pass
+    if margin and not pd.isna(margin):
+        try:
+            margin = float(margin)
+            profitability.append(f"Margin: {margin*100:.1f}%")
+        except (ValueError, TypeError):
+            pass
+    if profitability:
+        profile += f"\n      Profitability: {', '.join(profitability)}"
+
+    # Dividend yield
+    div_yield = f.get('DividendYield')
+    if div_yield and not pd.isna(div_yield):
+        try:
+            div_yield = float(div_yield)
+            if div_yield > 0:
+                profile += f"\n      Dividend Yield: {div_yield*100:.1f}%"
+        except (ValueError, TypeError):
+            pass
+
+    return profile
+
+
+# =============================================================================
+# Prompt Generation
+# =============================================================================
+
+def generate_name_prompt(
+    factor_code: str,
+    top_stocks: List[str],
+    bottom_stocks: List[str],
+    sector_analysis: Dict[str, Any] = None,
+    existing_names: List[str] = None,
+    # Enrichment parameters (optional)
+    fundamentals: pd.DataFrame = None,
+    loadings: pd.Series = None,
+    style_attribution: Dict[str, float] = None,
+    sector_exposure: Dict[str, float] = None,
+    factor_stats: Dict[str, Any] = None
+) -> str:
     """Generate structured prompt for LLM factor naming.
+
+    Creates a hedge-fund-style prompt that encourages names like:
+    - Fama-French: "Value", "Momentum", "Size", "Quality", "Low Vol"
+    - Hedge fund baskets: "Unprofitable Tech", "Dividend Aristocrats",
+      "Zombies", "R&D Giants", "High Beta Junk", "Space vs Defense"
 
     Args:
         factor_code: Factor identifier (e.g., "F1")
-        top_stocks: Top 10 stocks by factor exposure
-        bottom_stocks: Bottom 10 stocks by factor exposure
-        sector_analysis: Sector composition analysis
+        top_stocks: Top 10 stocks by positive factor exposure
+        bottom_stocks: Top 10 stocks by negative factor exposure
+        sector_analysis: Legacy sector composition analysis (optional)
         existing_names: Other factor names to avoid similarity
+        fundamentals: DataFrame with fundamental data for enriched profiles
+        loadings: Full factor loadings series for enriched profiles
+        style_attribution: Pre-calculated style attribution dict
+        sector_exposure: Pre-calculated sector exposure dict
+        factor_stats: Pre-calculated factor statistics dict
 
     Returns:
-        Formatted prompt string
+        Formatted prompt string for LLM
     """
-    # Build sector context
-    sector_text = ""
-    if sector_analysis:
+    sections = []
+
+    # Header with naming style guide
+    sections.append("""You are a quantitative hedge fund analyst naming latent factors extracted from stock returns.
+
+NAMING STYLE - Create names like professional quant funds use:
+- Fama-French classics: "Value", "Momentum", "Size", "Quality", "Low Volatility"
+- Hedge fund baskets: "Unprofitable Tech", "Dividend Aristocrats", "Zombies",
+  "R&D Giants", "High Beta Junk", "Asset Heavy vs Asset Light Energy"
+- Thematic: "Space vs Defense", "AI Infrastructure", "Rate Sensitive Financials"
+
+Capture: market anomalies, sentiment patterns, positioning themes, structural shifts,
+sector tilts, quality gradients, business model differences, behavioral biases.""")
+
+    sections.append(f"\nFACTOR: {factor_code}")
+
+    # Style attribution section (if available)
+    if style_attribution:
+        style_lines = []
+        # Sort by attribution value descending
+        sorted_styles = sorted(style_attribution.items(), key=lambda x: x[1], reverse=True)
+        for style, weight in sorted_styles:
+            if weight > 0.05:  # Only show significant attributions
+                style_lines.append(f"  - {style}: {weight:.0%}")
+        if style_lines:
+            sections.append(f"\nSTYLE ATTRIBUTION (correlation to known factors):\n" + "\n".join(style_lines))
+
+    # Sector exposure section (if available)
+    if sector_exposure:
+        sector_lines = []
+        for sector, weight in list(sector_exposure.items())[:6]:
+            sign = "+" if weight > 0 else ""
+            sector_lines.append(f"  - {sector}: {sign}{weight:.1%}")
+        if sector_lines:
+            sections.append(f"\nSECTOR EXPOSURE (loading-weighted):\n" + "\n".join(sector_lines))
+
+    # Factor statistics (if available)
+    if factor_stats:
+        stats_lines = []
+        if 'pos_count' in factor_stats:
+            stats_lines.append(f"  - Long positions: {factor_stats['pos_count']}")
+        if 'neg_count' in factor_stats:
+            stats_lines.append(f"  - Short positions: {factor_stats['neg_count']}")
+        if 'concentration' in factor_stats:
+            stats_lines.append(f"  - Concentration (HHI): {factor_stats['concentration']:.3f}")
+        if 'skew' in factor_stats:
+            stats_lines.append(f"  - Loading skewness: {factor_stats['skew']:.2f}")
+        if stats_lines:
+            sections.append(f"\nFACTOR STRUCTURE:\n" + "\n".join(stats_lines))
+
+    # Long positions with enriched profiles
+    if fundamentals is not None and loadings is not None and not fundamentals.empty:
+        # Build enriched profiles
+        long_profiles = []
+        for ticker in top_stocks[:10]:
+            if ticker in loadings.index:
+                loading = loadings[ticker]
+                profile = format_stock_profile(ticker, loading, fundamentals)
+                long_profiles.append(profile)
+        if long_profiles:
+            sections.append(f"\nLONG POSITIONS (top 10):\n" + "\n".join(long_profiles))
+        else:
+            sections.append(f"\nLONG POSITIONS (top 10):\n" + "\n".join(f"  - {s}" for s in top_stocks[:10]))
+    else:
+        # Simple ticker list
+        sections.append(f"\nLONG POSITIONS (positive loadings):\n" + "\n".join(f"  - {s}" for s in top_stocks[:10]))
+
+    # Short positions with enriched profiles
+    if fundamentals is not None and loadings is not None and not fundamentals.empty:
+        short_profiles = []
+        for ticker in bottom_stocks[:10]:
+            if ticker in loadings.index:
+                loading = loadings[ticker]
+                profile = format_stock_profile(ticker, loading, fundamentals)
+                short_profiles.append(profile)
+        if short_profiles:
+            sections.append(f"\nSHORT POSITIONS (top 10):\n" + "\n".join(short_profiles))
+        else:
+            sections.append(f"\nSHORT POSITIONS (top 10):\n" + "\n".join(f"  - {s}" for s in bottom_stocks[:10]))
+    else:
+        sections.append(f"\nSHORT POSITIONS (negative loadings):\n" + "\n".join(f"  - {s}" for s in bottom_stocks[:10]))
+
+    # Legacy sector analysis (if no enriched data)
+    if sector_analysis and not sector_exposure:
         top_sectors = sector_analysis.get('top_sectors', [])
         if top_sectors:
-            sector_text = "Top sectors by exposure: " + ", ".join(
-                f"{s['sector']} ({s['avg_loading']:.2f})" for s in top_sectors[:3]
-            )
+            sector_text = ", ".join(f"{s['sector']} ({s.get('avg_loading', 0):.2f})" for s in top_sectors[:3])
+            sections.append(f"\nTOP SECTORS: {sector_text}")
 
-    # Build existing names warning
-    existing_text = ""
+    # Existing names to avoid
     if existing_names:
-        existing_text = f"\nExisting factor names to avoid similarity with: {', '.join(existing_names)}"
+        sections.append(f"\nEXISTING FACTOR NAMES (avoid similarity): {', '.join(existing_names[:10])}")
 
-    prompt = f"""Name this financial factor based on the stock characteristics.
+    # Instructions
+    sections.append("""
+ANALYSIS INSTRUCTIONS:
+Identify the economic theme this factor captures:
+- VALUE vs GROWTH? Look for P/E, P/B differences between longs and shorts
+- MOMENTUM? Recent winners vs losers, trend-following patterns
+- SIZE? Large cap vs small cap split
+- QUALITY vs JUNK? Profitability, ROE, margins, debt levels
+- SECTOR ROTATION? Tech vs Energy? Healthcare vs Financials? Cyclical vs Defensive?
+- BUSINESS MODEL? Asset-light vs asset-heavy? Subscription vs transactional?
+- PROFITABILITY? Profitable vs unprofitable? High-margin vs low-margin?
 
-Factor: {factor_code}
+Respond with JSON:
+{
+  "short_name": "2-4 word hedge fund style name (max 30 chars)",
+  "description": "1 sentence economic rationale (max 100 chars)",
+  "theme": "High-level theme: Value, Momentum, Size, Quality, Sector, etc.",
+  "high_exposure_desc": "What unifies the long positions",
+  "low_exposure_desc": "What unifies the short positions",
+  "confidence": "high|medium|low",
+  "rationale": "2-3 sentences explaining your reasoning based on the data"
+}
 
-High Exposure Stocks (positive loadings):
-{chr(10).join(f"  - {s}" for s in top_stocks)}
+NAMING RULES:
+✗ AVOID: "Beta Factor", "Dynamic Mix", "Balanced Exposure", ticker-based names like "AAPL Factor"
+✗ AVOID: Generic terms: "Factor", "Dynamic", "Composite", "Multi", "Systematic"
+✓ USE: Specific themes: "Unprofitable Tech", "Dividend Aristocrats", "Quality Growth"
+✓ USE: Contrast patterns: "Growth vs Value", "Large vs Small", "Cyclical vs Defensive"
+✓ USE: Hedge fund language: "High Beta Junk", "Momentum Winners", "Deep Value Traps\"""")
 
-Low Exposure Stocks (negative loadings):
-{chr(10).join(f"  - {s}" for s in bottom_stocks)}
-
-{sector_text}{existing_text}
-
-Provide a concise, distinctive name that captures what distinguishes high-exposure from low-exposure stocks.
-
-Respond ONLY with valid JSON in this exact format:
-{{
-  "short_name": "2-4 word label (max 30 chars)",
-  "description": "1 sentence explaining the factor (max 100 chars)",
-  "theme": "High-level theme like 'Value vs Growth' or 'Sector Rotation'",
-  "high_exposure_desc": "What high-exposure stocks have in common",
-  "low_exposure_desc": "What low-exposure stocks have in common",
-  "confidence": "high|medium|low"
-}}
-
-Guidelines:
-- Use specific terms, not generic ones like "Beta", "Factor", "Dynamic"
-- Include contrast indicators like "vs" or "-" when comparing groups
-- Reference actual sectors or characteristics observed in the data
-- Keep short_name under 30 characters for chart labels
-- Avoid the pattern "X Earners vs Y Innovators" - be more specific about business models"""
-
-    return prompt
+    return "\n".join(sections)
 
 
 def parse_name_response(response_text: str) -> FactorName:
@@ -342,6 +657,7 @@ def parse_name_response(response_text: str) -> FactorName:
         high_exposure_desc=data.get("high_exposure_desc", ""),
         low_exposure_desc=data.get("low_exposure_desc", ""),
         confidence=data.get("confidence", "medium"),
+        rationale=data.get("rationale", ""),
         tags=[]  # Will be populated by detect_tags
     )
 
