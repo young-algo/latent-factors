@@ -256,34 +256,62 @@ def cmd_regime_detect(args):
     print("=" * 70)
     print("🎯 MARKET REGIME DETECTION")
     print("=" * 70)
-    
+
     from src.regime_detection import RegimeDetector
-    
+    from src.factor_labeler import batch_name_factors, validate_api_key
+    from src.config import config
+    import json
+
     frs, returns, loadings = load_or_generate_factors(args.universe)
-    
+
+    # Load or generate factor names
+    names_cache_file = f"factor_names_{'_'.join(args.universe)}_fundamental.json"
+    factor_names = {}
+
+    if Path(names_cache_file).exists():
+        with open(names_cache_file, 'r') as f:
+            factor_names = json.load(f)
+
+    factors_needing_names = [f for f in loadings.columns if f not in factor_names]
+    if factors_needing_names and validate_api_key() and frs is not None:
+        print(f"\n🏷️  Generating names for {len(factors_needing_names)} factors...")
+        fundamentals = frs.get_fundamentals() if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
+        new_names = batch_name_factors(
+            factor_exposures=loadings[factors_needing_names],
+            fundamentals=fundamentals,
+            factor_returns=returns[factors_needing_names] if not returns.empty else None,
+            top_n=10,
+            model=config.OPENAI_MODEL
+        )
+        for factor_id, factor_name_obj in new_names.items():
+            factor_names[factor_id] = factor_name_obj.short_name
+        with open(names_cache_file, 'w') as f:
+            json.dump(factor_names, f, indent=2)
+
     print(f"\n🔍 Fitting HMM with {args.regimes} regimes...")
     detector = RegimeDetector(returns)
     detector.fit_hmm(n_regimes=args.regimes)
-    
+
     current = detector.detect_current_regime()
     allocation = detector.generate_regime_signals()
-    
+
     print(f"\n📊 CURRENT REGIME:")
     print(f"   Regime: {current.regime.value.replace('_', ' ').title()}")
     print(f"   Confidence: {current.probability:.1%}")
     print(f"   Volatility: {current.volatility:.2%}")
     print(f"   Trend: {current.trend:.4f}")
     print(f"   Description: {current.description}")
-    
+
     print(f"\n💼 ALLOCATION RECOMMENDATION:")
     print(f"   Risk-on Score: {allocation.risk_on_score:.2f} (0=defensive, 1=aggressive)")
     print(f"   Defensive Tilt: {'Yes' if allocation.defensive_tilt else 'No'}")
     print(f"   Action: {allocation.recommended_action}")
-    
+
     print(f"\n📈 OPTIMAL FACTOR WEIGHTS:")
     for factor, weight in sorted(allocation.factor_weights.items(), key=lambda x: x[1], reverse=True):
         bar = "█" * int(weight * 50)
-        print(f"   {factor:<15} {weight:>6.2%} {bar}")
+        display_name = factor_names.get(factor, factor)
+        print(f"   {display_name:<30} {weight:>6.2%} {bar}")
     
     if args.predict:
         print(f"\n🔮 REGIME PREDICTIONS (Next {args.predict} days):")
@@ -447,8 +475,11 @@ def cmd_briefing(args):
     """Generate morning briefing with actionable recommendations."""
     from src.decision_synthesizer import DecisionSynthesizer
     from src.research import FactorResearchSystem
+    from src.factor_labeler import batch_name_factors, validate_api_key
+    from src.config import config
     import pickle
     from pathlib import Path
+    import json
 
     print("═" * 70)
     print("📋 GENERATING MORNING BRIEFING")
@@ -456,30 +487,71 @@ def cmd_briefing(args):
 
     # Load or generate factors
     cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.method}.pkl"
+    names_cache_file = f"factor_names_{'_'.join(args.universe)}_{args.method}.json"
+
+    # We need FRS for fundamentals even if factors are cached
+    api_key = get_api_key()
+    frs = FactorResearchSystem(
+        api_key,
+        universe=args.universe,
+        factor_method=args.method,
+        n_components=args.components,
+        expand_etfs=True
+    )
 
     if Path(cache_file).exists():
         print(f"\n📂 Loading cached factors from {cache_file}")
         with open(cache_file, 'rb') as f:
             factor_returns, factor_loadings = pickle.load(f)
-        factor_names = {}
     else:
         print(f"\n🔍 Generating factors for {', '.join(args.universe)}...")
-        api_key = get_api_key()
-        frs = FactorResearchSystem(
-            api_key,
-            universe=args.universe,
-            factor_method=args.method,
-            n_components=args.components,
-            expand_etfs=True
-        )
         frs.fit_factors()
         factor_returns = frs.get_factor_returns()
         factor_loadings = frs._expos
-        factor_names = {}
 
         # Cache for next time
         with open(cache_file, 'wb') as f:
             pickle.dump((factor_returns, factor_loadings), f)
+
+    # Generate LLM factor names (always - factors should always have meaningful names)
+    factor_names = {}
+
+    # Try to load cached names first
+    if Path(names_cache_file).exists():
+        print(f"\n📂 Loading cached factor names from {names_cache_file}")
+        with open(names_cache_file, 'r') as f:
+            factor_names = json.load(f)
+
+    # Generate names for any factors that don't have names yet
+    factors_needing_names = [f for f in factor_loadings.columns if f not in factor_names]
+
+    if factors_needing_names and validate_api_key():
+        print(f"\n🏷️  Generating names for {len(factors_needing_names)} factors...")
+
+        # Get fundamentals for naming context
+        fundamentals = frs.get_fundamentals() if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
+
+        # Generate names with full enrichment
+        new_names = batch_name_factors(
+            factor_exposures=factor_loadings[factors_needing_names],
+            fundamentals=fundamentals,
+            factor_returns=factor_returns[factors_needing_names] if not factor_returns.empty else None,
+            top_n=10,
+            model=config.OPENAI_MODEL
+        )
+
+        # Extract short names and merge
+        for factor_id, factor_name_obj in new_names.items():
+            factor_names[factor_id] = factor_name_obj.short_name
+
+        # Cache names for next time
+        with open(names_cache_file, 'w') as f:
+            json.dump(factor_names, f, indent=2)
+        print(f"   💾 Cached names to {names_cache_file}")
+    elif factors_needing_names:
+        print("\n⚠️  OpenAI API key not available - using factor IDs as names")
+        for f in factors_needing_names:
+            factor_names[f] = f
 
     # Generate briefing
     print("\n🔮 Analyzing signals...")
@@ -546,80 +618,103 @@ def cmd_optimize(args):
     print("=" * 70)
     print("🎯 FACTOR WEIGHT OPTIMIZATION")
     print("=" * 70)
-    
+
     from src.factor_optimization import SharpeOptimizer
     from src.research import FactorResearchSystem
+    from src.factor_labeler import batch_name_factors, validate_api_key
+    from src.config import config
     import json
-    
+    import pickle
+
     # Load or generate factors
     print(f"\n📊 Loading factor data for universe: {', '.join(args.universe)}")
-    
+
     cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.factor_method}.pkl"
-    
+    names_cache_file = f"factor_names_{'_'.join(args.universe)}_{args.factor_method}.json"
+
+    # Always create FRS for fundamentals (needed for naming)
+    frs = FactorResearchSystem(
+        get_api_key(),
+        universe=args.universe,
+        factor_method=args.factor_method,
+        n_components=args.n_components,
+        expand_etfs=True
+    )
+
     if Path(cache_file).exists():
         print(f"📂 Loading cached factors from {cache_file}")
-        import pickle
         with open(cache_file, 'rb') as f:
             factor_returns, factor_loadings = pickle.load(f)
-        frs = None  # Will recreate if needed for factor naming
     else:
         print(f"🔍 Generating factors using '{args.factor_method}' method (this may take a while)...")
-        frs = FactorResearchSystem(
-            get_api_key(),
-            universe=args.universe,
-            factor_method=args.factor_method,
-            n_components=args.n_components,
-            expand_etfs=True
-        )
         frs.fit_factors()
         factor_returns = frs.get_factor_returns()
         factor_loadings = frs._expos
-        
-        # Cache only the factor data (not the FactorResearchSystem object)
-        import pickle
+
+        # Cache factor data
         with open(cache_file, 'wb') as f:
             pickle.dump((factor_returns, factor_loadings), f)
-    
+
     print(f"   Factor returns shape: {factor_returns.shape}")
     print(f"   Factor loadings shape: {factor_loadings.shape}")
-    
+
     # Initialize optimizer
     optimizer = SharpeOptimizer(factor_returns, factor_loadings)
-    
-    # Factor naming (if enabled) - do this once before optimization
+
+    # Always generate factor names (factors should always have meaningful names)
     factor_names = {}
-    if args.name_factors:
-        print("\n" + "=" * 70)
-        print("🤖 FACTOR NAMING")
-        print("=" * 70)
-        
-        from src.config import config
-        if not config.validate_openai():
-            print("⚠️  OPENAI_API_KEY not found. Skipping factor naming.")
-            print("   Set OPENAI_API_KEY environment variable to enable LLM naming.")
-        elif frs is None:
-            print("⚠️  Cannot name factors when loading from cache (FactorResearchSystem not available).")
-            print("   Run without --name-factors or delete cache file to regenerate with naming.")
-        else:
-            try:
-                print("\n🔍 Analyzing factor loadings for naming...")
-                factor_names = frs.name_factors(cache_path=args.factor_names_output.replace('.csv', '.json'))
-                
-                print("\n📋 Factor Names:")
-                for factor, name in factor_names.items():
-                    print(f"   {factor}: {name}")
-                
-                # Save factor names to CSV
-                names_df = pd.DataFrame({
-                    'factor': list(factor_names.keys()),
-                    'name': list(factor_names.values())
-                })
-                names_df.to_csv(args.factor_names_output, index=False)
-                print(f"\n💾 Factor names saved to: {args.factor_names_output}")
-                
-            except Exception as e:
-                print(f"⚠️  Factor naming failed: {e}")
-                factor_names = {}
+
+    # Try to load cached names first
+    if Path(names_cache_file).exists():
+        print(f"\n📂 Loading cached factor names from {names_cache_file}")
+        with open(names_cache_file, 'r') as f:
+            factor_names = json.load(f)
+
+    # Generate names for any factors that don't have names yet
+    factors_needing_names = [f for f in factor_loadings.columns if f not in factor_names]
+
+    if factors_needing_names and validate_api_key():
+        print(f"\n🏷️  Generating names for {len(factors_needing_names)} factors...")
+
+        # Get fundamentals for naming context
+        fundamentals = frs.get_fundamentals() if hasattr(frs, 'get_fundamentals') else pd.DataFrame()
+
+        # Generate names with full enrichment
+        new_names = batch_name_factors(
+            factor_exposures=factor_loadings[factors_needing_names],
+            fundamentals=fundamentals,
+            factor_returns=factor_returns[factors_needing_names] if not factor_returns.empty else None,
+            top_n=10,
+            model=config.OPENAI_MODEL
+        )
+
+        # Extract short names and merge
+        for factor_id, factor_name_obj in new_names.items():
+            factor_names[factor_id] = factor_name_obj.short_name
+
+        # Cache names
+        with open(names_cache_file, 'w') as f:
+            json.dump(factor_names, f, indent=2)
+        print(f"   💾 Cached names to {names_cache_file}")
+
+        # Also save to CSV if requested
+        if args.name_factors:
+            names_df = pd.DataFrame({
+                'factor': list(factor_names.keys()),
+                'name': list(factor_names.values())
+            })
+            names_df.to_csv(args.factor_names_output, index=False)
+            print(f"   💾 Factor names saved to: {args.factor_names_output}")
+    elif factors_needing_names:
+        print("\n⚠️  OpenAI API key not available - using factor IDs as names")
+        for f in factors_needing_names:
+            factor_names[f] = f
+
+    # Display factor names
+    if factor_names:
+        print("\n📋 Factor Names:")
+        for factor, name in sorted(factor_names.items()):
+            print(f"   {factor}: {name}")
     
     if args.walk_forward:
         print(f"\n🔄 Running walk-forward optimization...")
@@ -685,7 +780,8 @@ def cmd_optimize(args):
         print(f"\n📈 Optimal Factor Weights:")
         for factor, weight in sorted(result.optimal_weights.items(), key=lambda x: -x[1]):
             bar = "█" * int(weight * 50)
-            print(f"   {factor:<20} {weight:>6.1%} {bar}")
+            display_name = factor_names.get(factor, factor)
+            print(f"   {display_name:<30} {weight:>6.1%} {bar}")
         
         # Export weights
         if args.export_weights:
@@ -723,27 +819,39 @@ def cmd_basket(args):
     """Generate tradeable stock basket from optimization results."""
     import json
     import pickle
-    
+
     print("=" * 70)
     print("📊 GENERATING TRADEABLE BASKET")
     print("=" * 70)
-    
+
     # Load optimization results
     print(f"\n📂 Loading optimization results from: {args.results}")
     with open(args.results, 'r') as f:
         opt_results = json.load(f)
-    
+
     # Load factor loadings from cache
     cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.factor_method}.pkl"
     if not Path(cache_file).exists():
         print(f"❌ Cache file not found: {cache_file}")
         print("   Run optimization first to generate factor loadings.")
         sys.exit(1)
-    
+
     print(f"📂 Loading factor loadings from: {cache_file}")
     with open(cache_file, 'rb') as f:
         _, factor_loadings = pickle.load(f)
-    
+
+    # Load factor names from cache or results
+    names_cache_file = f"factor_names_{'_'.join(args.universe)}_{args.factor_method}.json"
+    factor_names = {}
+
+    # Try to get names from optimization results first
+    if isinstance(opt_results, dict) and 'factor_names' in opt_results:
+        factor_names = opt_results['factor_names']
+    # Otherwise try the cache file
+    elif Path(names_cache_file).exists():
+        with open(names_cache_file, 'r') as f:
+            factor_names = json.load(f)
+
     # Get factor weights
     if isinstance(opt_results, list):
         # Walk-forward results - average factor weights across all periods
@@ -759,10 +867,11 @@ def cmd_basket(args):
         print("❌ No factor weights found in results file.")
         print("   Expected 'optimal_weights' key or a list of walk-forward results.")
         sys.exit(1)
-    
+
     print(f"\n📈 Optimal Factor Weights:")
     for f, w in sorted(factor_weights.items(), key=lambda x: -x[1]):
-        print(f"   {f}: {w:.2%}")
+        display_name = factor_names.get(f, f)
+        print(f"   {display_name:<30}: {w:.2%}")
     
     # Calculate composite stock scores
     print("\n🔍 Calculating target stock exposures...")
