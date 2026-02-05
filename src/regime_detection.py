@@ -270,9 +270,10 @@ class RegimeDetector:
     def fit_hmm(
         self,
         n_regimes: int = 3,
-        covariance_type: str = 'full',
+        covariance_type: str = 'diag',
         n_iter: int = 100,
-        random_state: int = 42
+        random_state: int = 42,
+        n_init: int = 5
     ) -> 'RegimeDetector':
         """
         Train Hidden Markov Model on factor returns.
@@ -281,12 +282,16 @@ class RegimeDetector:
         ----------
         n_regimes : int, default 3
             Number of hidden states (2-4 recommended)
-        covariance_type : str, default 'full'
-            Covariance matrix type: 'full', 'tied', 'diag', 'spherical'
+        covariance_type : str, default 'diag'
+            Covariance matrix type: 'full', 'tied', 'diag', 'spherical'.
+            Default is 'diag' for numerical stability with correlated factors.
         n_iter : int, default 100
             Maximum number of EM iterations
         random_state : int, default 42
             Random seed for reproducibility
+        n_init : int, default 5
+            Number of random initializations to try. Best model (highest
+            log-likelihood) is kept. Helps avoid local optima.
 
         Returns
         -------
@@ -333,19 +338,42 @@ class RegimeDetector:
 
         _LOGGER.info(f"Fitting HMM with {n_regimes} regimes on {len(X_clean)} observations")
 
-        # Fit HMM
-        self.hmm_model = GaussianHMM(
-            n_components=n_regimes,
-            covariance_type=covariance_type,
-            n_iter=n_iter,
-            random_state=random_state,
-            verbose=False
-        )
+        # Try multiple initializations and keep the best model
+        # Suppress hmmlearn convergence warnings - they're often harmless
+        best_model = None
+        best_score = float('-inf')
 
-        self.hmm_model.fit(X_clean)
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message='.*not converging.*')
+            warnings.filterwarnings('ignore', category=DeprecationWarning)
+
+            for init in range(n_init):
+                model = GaussianHMM(
+                    n_components=n_regimes,
+                    covariance_type=covariance_type,
+                    n_iter=n_iter,
+                    random_state=random_state + init,
+                    verbose=False
+                )
+
+                try:
+                    model.fit(X_clean)
+                    score = model.score(X_clean)
+
+                    if score > best_score:
+                        best_score = score
+                        best_model = model
+                except Exception as e:
+                    _LOGGER.debug(f"HMM init {init} failed: {e}")
+                    continue
+
+        if best_model is None:
+            raise RuntimeError("All HMM initializations failed")
+
+        self.hmm_model = best_model
 
         _LOGGER.info(f"HMM converged: {self.hmm_model.monitor_.converged}")
-        _LOGGER.info(f"Log likelihood: {self.hmm_model.score(X_clean):.2f}")
+        _LOGGER.info(f"Log likelihood: {best_score:.2f} (best of {n_init} initializations)")
 
         # Label regimes based on learned parameters
         self._label_regimes()
