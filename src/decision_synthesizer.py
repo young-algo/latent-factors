@@ -156,3 +156,55 @@ class ConvictionScorer:
             return ConvictionLevel.LOW
         else:
             return ConvictionLevel.CONFLICTED
+
+    def calculate_alignment(
+        self,
+        regime_bullish: bool,
+        momentum_bullish: List[bool],
+        cross_section_bullish: bool
+    ) -> int:
+        """
+        Calculate signal alignment score (1-10).
+
+        Regime dominates: if regime conflicts with other signals,
+        alignment is capped at 4 regardless of other agreement.
+
+        Args:
+            regime_bullish: Whether regime favors risk-on
+            momentum_bullish: List of bool for each factor's momentum direction
+            cross_section_bullish: Whether cross-sectional spread favors longs
+
+        Returns:
+            Alignment score from 1 to 10
+        """
+        # Count bullish signals
+        momentum_bullish_count = sum(momentum_bullish)
+        momentum_total = len(momentum_bullish)
+        momentum_pct = momentum_bullish_count / momentum_total if momentum_total > 0 else 0.5
+
+        # Determine overall non-regime direction (majority vote)
+        non_regime_bullish = (momentum_pct > 0.5) or cross_section_bullish
+
+        # Check for regime conflict (regime dominates rule)
+        regime_conflict = regime_bullish != non_regime_bullish
+
+        if regime_conflict:
+            # Cap at 4 when regime conflicts
+            base_score = 2 + (momentum_pct * 2)  # 2-4 range
+            return int(min(base_score, 4))
+
+        # No regime conflict - calculate alignment
+        # Start with base score
+        score = 4.0
+
+        # Add momentum agreement (up to +3)
+        if momentum_pct >= 0.8:
+            score += 3.0
+        elif momentum_pct >= 0.6:
+            score += 1.0  # Partial agreement gets less bonus
+
+        # Add cross-sectional confirmation (up to +3)
+        if cross_section_bullish == regime_bullish:
+            score += 3.0
+
+        return int(min(score, 10))

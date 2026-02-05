@@ -117,3 +117,43 @@ class TestConvictionScoring:
 
         assert 5.0 <= score < 8.0
         assert scorer.to_level(score) == ConvictionLevel.MEDIUM
+
+
+class TestSignalAlignment:
+    """Tests for signal alignment scoring."""
+
+    def test_perfect_alignment(self):
+        """All bullish signals should give 9-10 alignment."""
+        scorer = ConvictionScorer()
+
+        alignment = scorer.calculate_alignment(
+            regime_bullish=True,
+            momentum_bullish=[True, True, True],  # 3 factors all bullish
+            cross_section_bullish=True
+        )
+
+        assert alignment >= 9
+
+    def test_mixed_signals(self):
+        """Mixed signals should give 4-6 alignment."""
+        scorer = ConvictionScorer()
+
+        alignment = scorer.calculate_alignment(
+            regime_bullish=True,
+            momentum_bullish=[True, False, True],  # 2 of 3 bullish
+            cross_section_bullish=False
+        )
+
+        assert 4 <= alignment <= 6
+
+    def test_conflicting_signals(self):
+        """Regime vs other signals conflicting should give 1-3."""
+        scorer = ConvictionScorer()
+
+        alignment = scorer.calculate_alignment(
+            regime_bullish=False,  # Regime says bearish
+            momentum_bullish=[True, True, True],  # But momentum bullish
+            cross_section_bullish=True
+        )
+
+        assert alignment <= 4  # Regime conflict penalized heavily
