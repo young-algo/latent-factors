@@ -705,3 +705,66 @@ class DecisionSynthesizer:
         lines.append(f"└{'─' * 68}┘")
 
         return lines
+
+
+@dataclass
+class PositionSizer:
+    """
+    Calculate position sizes based on conviction and risk limits.
+
+    Base sizes by conviction:
+    - HIGH (8-10): 5% of portfolio
+    - MEDIUM (5-7): 3% of portfolio
+    - LOW (3-4): 1% of portfolio
+    - CONFLICTED: 0%
+    """
+
+    portfolio_value: float
+    base_sizes: Dict[ConvictionLevel, float] = field(default_factory=lambda: {
+        ConvictionLevel.HIGH: 0.05,
+        ConvictionLevel.MEDIUM: 0.03,
+        ConvictionLevel.LOW: 0.01,
+        ConvictionLevel.CONFLICTED: 0.0
+    })
+
+    def calculate_size(
+        self,
+        conviction: ConvictionLevel,
+        conviction_score: float,
+        current_exposure: float,
+        exposure_limit: float
+    ) -> float:
+        """
+        Calculate position size respecting conviction and limits.
+
+        Args:
+            conviction: Conviction level
+            conviction_score: Numeric score (0-10)
+            current_exposure: Current exposure to this factor/direction
+            exposure_limit: Maximum allowed exposure
+
+        Returns:
+            Position size as fraction of portfolio
+        """
+        base_size = self.base_sizes.get(conviction, 0.0)
+
+        # Check exposure limit
+        remaining_room = max(0, exposure_limit - current_exposure)
+
+        # Cap at remaining room
+        final_size = min(base_size, remaining_room)
+
+        return final_size
+
+    def calculate_dollars(
+        self,
+        conviction: ConvictionLevel,
+        conviction_score: float,
+        current_exposure: float,
+        exposure_limit: float
+    ) -> float:
+        """Calculate position size in dollars."""
+        size_pct = self.calculate_size(
+            conviction, conviction_score, current_exposure, exposure_limit
+        )
+        return size_pct * self.portfolio_value

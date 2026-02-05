@@ -297,3 +297,53 @@ class TestBriefingRenderer:
 
         # Should contain recommendation formatting
         assert "Conviction:" in briefing or "ACTION:" in briefing
+
+
+class TestPositionSizing:
+    """Tests for position sizing logic."""
+
+    def test_high_conviction_full_size(self):
+        """HIGH conviction should get full 5% position."""
+        from src.decision_synthesizer import PositionSizer
+
+        sizer = PositionSizer(portfolio_value=1_000_000)
+
+        size = sizer.calculate_size(
+            conviction=ConvictionLevel.HIGH,
+            conviction_score=8.5,
+            current_exposure=0.10,
+            exposure_limit=0.25
+        )
+
+        assert size == 0.05  # 5% of portfolio
+
+    def test_conflicted_zero_size(self):
+        """CONFLICTED conviction should get zero position."""
+        from src.decision_synthesizer import PositionSizer
+
+        sizer = PositionSizer(portfolio_value=1_000_000)
+
+        size = sizer.calculate_size(
+            conviction=ConvictionLevel.CONFLICTED,
+            conviction_score=2.0,
+            current_exposure=0.10,
+            exposure_limit=0.25
+        )
+
+        assert size == 0.0
+
+    def test_exposure_limit_respected(self):
+        """Position should be reduced if it would breach exposure limit."""
+        from src.decision_synthesizer import PositionSizer
+
+        sizer = PositionSizer(portfolio_value=1_000_000)
+
+        # Current exposure 22%, limit 25%, so max add is 3%
+        size = sizer.calculate_size(
+            conviction=ConvictionLevel.HIGH,  # Would normally be 5%
+            conviction_score=9.0,
+            current_exposure=0.22,
+            exposure_limit=0.25
+        )
+
+        assert size <= 0.03  # Capped by remaining room
