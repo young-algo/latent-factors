@@ -12,6 +12,7 @@ This system helps active traders answer critical questions:
 - Which stocks should I long/short based on factor exposures? (Cross-Sectional Analysis)
 - What market regime are we in and how should I position? (Regime Detection)
 - Would my strategy have worked historically? (Backtesting)
+- **What should I do today?** (Morning Briefing / Decision Synthesizer)
 
 ## Key Features
 
@@ -28,6 +29,7 @@ This system helps active traders answer critical questions:
 | PIT Universe Construction | Reconstructs historical market state including delisted stocks | Eliminate survivorship bias from backtests |
 | Interactive Dashboard | Streamlit UI for real-time monitoring | Visual factor monitoring without coding |
 | **Alpha Command Center** | Institutional-grade PM dashboard | Risk attribution, explainability, execution |
+| **Morning Briefing** | Decision Synthesizer with conviction scoring | Turn abstract signals into actionable trades |
 
 ## Alpha Command Center: Factor Operations Terminal
 
@@ -300,6 +302,7 @@ uv run python -m src optimize      # Factor weight optimization
 uv run python -m src basket        # Generate tradeable basket
 uv run python -m src signals       # Trading signals (extremes, momentum, cross-section)
 uv run python -m src regime        # Market regime detection
+uv run python -m src briefing      # Morning briefing with actionable recommendations
 uv run python -m src backtest      # Signal backtesting
 uv run python -m src dashboard     # Launch Streamlit dashboard
 uv run python -m src report        # Generate reports
@@ -507,6 +510,82 @@ for date in backtest_dates:
 uv run python -m src dashboard
 ```
 
+### Morning Briefing (Decision Synthesizer)
+
+**What it does:** Synthesizes all signals (regime, factor momentum, cross-sectional) into a single actionable morning briefing with conviction-scored recommendations.
+
+**Why use it:** Solves the "signals feel too abstract" problem by translating complex multi-signal outputs into clear trading decisions with conviction levels and position sizing.
+
+```bash
+# Generate morning briefing from cached factor data
+uv run python -m src briefing --universe SPY --method pca
+
+# Generate briefing with fresh factor discovery
+uv run python -m src briefing --universe VTHR --method ica --n-factors 10
+```
+
+**Output Structure:**
+
+```
+================================================================================
+                           MORNING BRIEFING - 2026-02-04
+================================================================================
+
+REGIME: Low-Vol Bull (78% confidence, 12 days)
+        Trend: strengthening
+
+FACTOR MOMENTUM (7-day):
+  • Tech-Momentum:    +2.1% [strong]
+  • Quality:          +0.8% [moderate]
+
+SIGNAL ALIGNMENT: 8/10
+  ✓ Regime supports momentum strategies
+  ✓ Factor signals confirm direction
+  ✓ Cross-sectional spread elevated (1.2σ)
+
+────────────────────────────────────────────────────────────────────────────────
+RECOMMENDATIONS
+────────────────────────────────────────────────────────────────────────────────
+
+ACTION: Increase Tech-Momentum exposure
+Conviction: HIGH (8.2/10)
+Category: OPPORTUNISTIC
+
+Reasons:
+  • Regime: Low-Vol Bull favors momentum factors
+  • Signal: Tech-Momentum +2.1% over 7 days (z-score: 1.8)
+  • Confirmation: Cross-sectional ranks show tech in top decile
+
+Expressions:
+  • Simple: Buy QQQ (5% position)
+  • Targeted: NVDA, MSFT, AAPL, AMD, AVGO (1% each)
+
+Exit Trigger: Regime flips to High-Vol or Bear
+```
+
+**Conviction Scoring:**
+
+The Decision Synthesizer uses weighted dimensions to calculate conviction:
+
+| Dimension | Weight | What It Measures |
+|-----------|--------|------------------|
+| Signal Strength | 40% | Z-score magnitude of factor signals |
+| Signal Agreement | 35% | How many signals point the same direction |
+| Regime Fit | 25% | Does the trade fit the current market regime? |
+
+**Conviction Levels:**
+
+| Level | Score | Position Size | When It Applies |
+|-------|-------|---------------|-----------------|
+| HIGH | 8-10 | 5% | All signals aligned, strong magnitude |
+| MEDIUM | 5-7.9 | 3% | Partial agreement, moderate signals |
+| LOW | 3-4.9 | 1% | Weak signals, monitor only |
+| CONFLICTED | 0-2.9 | 0% | Regime conflicts with other signals |
+
+**Regime Dominance Rule:**
+
+When the regime signal conflicts with other signals, the alignment score is capped at 4 (CONFLICTED). This implements a "risk management first" philosophy—if the market regime says bearish, don't fight it regardless of other bullish signals.
+
 ## Complete Trading Workflow Example
 
 ### Discover, Optimize, Trade
@@ -538,6 +617,10 @@ uv run python -m src basket \
 ### Daily Pre-Market Routine
 
 ```bash
+# Get your morning briefing (synthesizes all signals into actionable recommendations)
+uv run python -m src briefing --universe SPY --method pca
+
+# Or dive deeper into individual signals:
 # Check overnight regime status
 uv run python -m src regime detect --universe SPY --predict 5
 
@@ -561,6 +644,7 @@ equity-factors/
 │   ├── factor_weighting.py         # Factor weighting methods
 │   ├── latent_factors.py           # Factor discovery (PCA, ICA, NMF, AE)
 │   ├── factor_labeler.py           # LLM-powered factor naming
+│   ├── decision_synthesizer.py     # Morning briefing & conviction scoring
 │   ├── trading_signals.py          # Technical indicators
 │   ├── cross_sectional.py          # Cross-sectional ranking
 │   ├── regime_detection.py         # HMM-based regime identification
