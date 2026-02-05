@@ -558,3 +558,150 @@ class DecisionSynthesizer:
                 conflicts.append(f"{fm.name} momentum is {'bullish' if momentum_bullish else 'bearish'}")
 
         return conflicts
+
+    def render_briefing(
+        self,
+        state: SignalState,
+        recommendations: List[Recommendation],
+        format: str = "text"
+    ) -> str:
+        """
+        Render morning briefing as formatted text.
+
+        Args:
+            state: Current SignalState
+            recommendations: Generated recommendations
+            format: Output format ("text" or "markdown")
+
+        Returns:
+            Formatted briefing string
+        """
+        lines = []
+
+        # Header
+        lines.append("═" * 70)
+        lines.append(f"MORNING BRIEFING - {state.date.strftime('%Y-%m-%d')}")
+        lines.append("═" * 70)
+        lines.append("")
+
+        # Regime section
+        regime = state.regime
+        lines.append(f"REGIME: {regime.name} ({regime.confidence:.0%} confidence, {regime.days_in_regime} days)")
+        lines.append(f"TREND:  {regime.trend.capitalize()}")
+        lines.append("")
+
+        # Factor momentum section
+        lines.append("FACTOR MOMENTUM (7-day):")
+        for fm in state.factor_momentum:
+            symbol = self._strength_symbol(fm.strength, fm.return_7d > 0)
+            sign = "+" if fm.return_7d > 0 else ""
+            lines.append(f"  {symbol} {fm.name:<20} {sign}{fm.return_7d:.1%}  ({fm.strength})")
+        lines.append("")
+
+        # Extremes section
+        if state.extremes_detected:
+            lines.append("EXTREMES DETECTED:")
+            for ext in state.extremes_detected:
+                lines.append(f"  ⚠ {ext.name}: z-score {ext.z_score:.1f} ({ext.direction})")
+        else:
+            lines.append("EXTREMES DETECTED: None today")
+        lines.append("")
+
+        # Signal alignment
+        alignment = self._calculate_overall_alignment(state)
+        lines.append(f"SIGNAL ALIGNMENT: {alignment}/10 {self._alignment_description(alignment)}")
+        lines.append("")
+
+        # Recommendations by category
+        lines.append("─" * 70)
+        lines.append("RECOMMENDATIONS")
+        lines.append("─" * 70)
+
+        for category in [ActionCategory.OPPORTUNISTIC, ActionCategory.WEEKLY_REBALANCE, ActionCategory.WATCH]:
+            cat_recs = [r for r in recommendations if r.category == category]
+            if cat_recs:
+                lines.append("")
+                lines.append(f"▸ {category.value}")
+                for rec in cat_recs:
+                    lines.extend(self._format_recommendation(rec))
+
+        if not recommendations:
+            lines.append("")
+            lines.append("No actionable recommendations at this time.")
+
+        lines.append("")
+        lines.append("═" * 70)
+
+        return "\n".join(lines)
+
+    def _strength_symbol(self, strength: str, is_positive: bool) -> str:
+        """Return symbol for momentum strength."""
+        if strength == "strong":
+            return "✓" if is_positive else "✗"
+        elif strength == "moderate":
+            return "✓" if is_positive else "✗"
+        else:
+            return "○"
+
+    def _calculate_overall_alignment(self, state: SignalState) -> int:
+        """Calculate overall signal alignment score."""
+        bullish_regimes = ["Low-Vol Bull", "High-Vol Bull"]
+        regime_bullish = state.regime.name in bullish_regimes
+
+        momentum_bullish = [fm.return_7d > 0 for fm in state.factor_momentum]
+        cross_bullish = state.cross_sectional_spread > 1.0
+
+        return self.scorer.calculate_alignment(
+            regime_bullish=regime_bullish,
+            momentum_bullish=momentum_bullish,
+            cross_section_bullish=cross_bullish
+        )
+
+    def _alignment_description(self, score: int) -> str:
+        """Return description for alignment score."""
+        if score >= 9:
+            return "→ Act with confidence"
+        elif score >= 6:
+            return "→ Act with normal sizing"
+        elif score >= 4:
+            return "→ Reduce sizes or wait"
+        else:
+            return "→ Stay flat or defensive"
+
+    def _format_recommendation(self, rec: Recommendation) -> List[str]:
+        """Format a single recommendation."""
+        lines = []
+        lines.append("")
+        lines.append(f"┌{'─' * 68}┐")
+        lines.append(f"│ ACTION: {rec.action:<58}│")
+        lines.append(f"├{'─' * 68}┤")
+        lines.append(f"│ Conviction: {rec.conviction.value} ({rec.conviction_score}/10){' ' * (68 - 25 - len(rec.conviction.value))}│")
+        lines.append(f"│{' ' * 68}│")
+        lines.append(f"│ WHY:{' ' * 63}│")
+        for reason in rec.reasons[:3]:  # Limit to 3 reasons
+            reason_trimmed = reason[:62]
+            lines.append(f"│  • {reason_trimmed:<63}│")
+
+        if rec.conflicts:
+            lines.append(f"│{' ' * 68}│")
+            lines.append(f"│ CONFLICTS:{' ' * 57}│")
+            for conflict in rec.conflicts[:2]:
+                conflict_trimmed = conflict[:62]
+                lines.append(f"│  • {conflict_trimmed:<63}│")
+        else:
+            lines.append(f"│{' ' * 68}│")
+            lines.append(f"│ CONFLICTS: None{' ' * 52}│")
+
+        if rec.expressions:
+            lines.append(f"│{' ' * 68}│")
+            lines.append(f"│ SUGGESTED EXPRESSION:{' ' * 46}│")
+            for expr in rec.expressions[:2]:
+                expr_str = f"{expr.description}: {expr.trade} ({expr.size_pct:.0%})"[:62]
+                lines.append(f"│  • {expr_str:<63}│")
+
+        lines.append(f"│{' ' * 68}│")
+        exit_trimmed = rec.exit_trigger[:55]
+        lines.append(f"│ EXIT: {exit_trimmed:<61}│")
+        lines.append(f"└{'─' * 68}┘")
+
+        return lines

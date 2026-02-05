@@ -248,3 +248,52 @@ class TestRecommendationGeneration:
         # Low conviction should result in WATCH, not action
         for rec in recommendations:
             assert rec.category == ActionCategory.WATCH or rec.conviction_score < 5.0
+
+
+class TestBriefingRenderer:
+    """Tests for morning briefing rendering."""
+
+    def test_render_briefing_contains_sections(self):
+        """Rendered briefing should contain all required sections."""
+        synthesizer = DecisionSynthesizer()
+
+        state = SignalState(
+            date=datetime(2026, 2, 4),
+            regime=RegimeState("Low-Vol Bull", 0.78, 12, "strengthening"),
+            factor_momentum=[
+                FactorMomentum("F1", "Tech-Momentum", 0.021, "strong"),
+                FactorMomentum("F2", "Quality", 0.008, "moderate"),
+            ],
+            extremes_detected=[],
+            cross_sectional_spread=1.2
+        )
+
+        recommendations = synthesizer.generate_recommendations(state)
+        briefing = synthesizer.render_briefing(state, recommendations)
+
+        # Check required sections exist
+        assert "MORNING BRIEFING" in briefing
+        assert "REGIME:" in briefing
+        assert "FACTOR MOMENTUM" in briefing
+        assert "SIGNAL ALIGNMENT" in briefing
+        assert "Tech-Momentum" in briefing
+
+    def test_render_briefing_formats_recommendations(self):
+        """Recommendations should be formatted with conviction and reasons."""
+        synthesizer = DecisionSynthesizer()
+
+        state = SignalState(
+            date=datetime(2026, 2, 4),
+            regime=RegimeState("Low-Vol Bull", 0.85, 5, "stable"),
+            factor_momentum=[
+                FactorMomentum("F1", "Tech-Momentum", 0.025, "strong"),
+            ],
+            extremes_detected=[],
+            cross_sectional_spread=1.5
+        )
+
+        recommendations = synthesizer.generate_recommendations(state)
+        briefing = synthesizer.render_briefing(state, recommendations)
+
+        # Should contain recommendation formatting
+        assert "Conviction:" in briefing or "ACTION:" in briefing
