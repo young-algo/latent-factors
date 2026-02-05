@@ -103,6 +103,7 @@ from sklearn.preprocessing import StandardScaler
 import openai                           # pip install openai>=1.2
 
 from .alphavantage_system import DataBackend
+from .config import config
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
@@ -611,7 +612,8 @@ class FactorResearchSystem(DataBackend):
         ----------
         model : str, default "gpt-5-mini"
             OpenAI model to use for factor naming.
-            Options: "gpt-5-mini", "gpt-5.2", "gpt-5.2-pro"
+            Options: "gpt-5-mini" (cost-effective), "gpt-5", "gpt-5.1", "gpt-5.2" (more capable),
+                     "gpt-4o-mini", "gpt-4o" (alternative models)
             Recommendation: "gpt-5-mini" for cost-effectiveness
             
         top_n : int, default 8
@@ -689,7 +691,7 @@ class FactorResearchSystem(DataBackend):
         >>> # {"F1": "Growth vs Value: High P/E tech vs low P/E financials",
         >>> #  "F2": "Size Factor: Large cap vs small cap stocks"}
         
-        >>> # Use more expensive model for better names
+        >>> # Use more capable model for better names
         >>> premium_names = frs.name_factors(model="gpt-5.2", top_n=12)
         
         >>> # Force refresh of factor names
@@ -732,7 +734,11 @@ class FactorResearchSystem(DataBackend):
         client = openai.OpenAI(
             api_key=os.environ.get("OPENAI_API_KEY")
         )
-        resp = client.chat.completions.create(model=model, messages=messages)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_completion_tokens=config.OPENAI_MAX_COMPLETION_TOKENS
+        )
         ans = resp.choices[0].message.content.strip().split("\n")
         names = {f: (line.split(":", 1)[-1] if ":" in line else line).strip()
                  for f, line in zip(self._expos.columns, ans)}
@@ -1424,52 +1430,40 @@ class FactorResearchSystem(DataBackend):
     # ---------- statistical engines ---------- #
     def _rolling_stat_model(self, rets: pd.DataFrame):
         """
-        Rolling statistical factor model with correct factor return calculation.
+        Statistical factor model using centralized latent_factors engine.
         
-        Fits decomposition on standardized rolling window but calculates factor
-        returns in original return space (not standardized space) to ensure
-        factor returns represent actual tradable portfolio returns.
+        Delegates to src.latent_factors.statistical_factors for:
+        1. Automatic Beta Residualization (removes market/sector exposure)
+        2. Auto-orthogonalization (for ICA/NMF)
+        3. Robust factor extraction
+        
+        Note: This uses a batch fit over the provided history rather than 
+        a rolling window loop, ensuring stable factor definitions.
         """
-        scaler = StandardScaler()
-        if self.method == "pca":
-            decomp = PCA(self.k)
-        elif self.method == "sparse_pca":
-            decomp = SparsePCA(self.k, random_state=0)
-        elif self.method == "factor":
-            decomp = FactorAnalysis(self.k, random_state=0)
-        elif self.method == "ica":
-            decomp = FastICA(self.k, random_state=0)
-        else:
-            raise ValueError(self.method)
-
-        fac_rets, loads, dates = [], [], []
-        for t in range(self.roll, len(rets)):
-            win = rets.iloc[t-self.roll:t]
-            # Standardize for stable decomposition fitting
-            z = scaler.fit_transform(win.values)
-            decomp.fit(z)
+        from .latent_factors import statistical_factors, StatMethod
+        
+        # Map method string to Enum
+        method_map = {
+            "pca": StatMethod.PCA,
+            "ica": StatMethod.ICA,
+            "nmf": StatMethod.NMF,
+            "sparse_pca": StatMethod.SPARSE_PCA,
+            "factor": StatMethod.FACTOR_ANALYSIS
+        }
+        
+        stat_method = method_map.get(self.method)
+        if stat_method is None:
+            raise ValueError(f"Unknown factor method: {self.method}")
             
-            # Get loadings (components transposed: stocks × factors)
-            load = pd.DataFrame(
-                decomp.components_.T, index=rets.columns,
-                columns=[f"F{i+1}" for i in range(self.k)]
-            )
-            
-            # Calculate factor returns in ORIGINAL return space (not standardized)
-            # Factor return = weighted average of stock returns, where weights are loadings
-            today_rets = rets.iloc[t]
-            
-            # Normalize loadings so they sum to 1 for each factor (dollar-neutral long-short)
-            # This prevents amplification by the number of stocks
-            load_normalized = load.div(load.abs().sum())
-            
-            # Calculate factor return as weighted portfolio return
-            factor_ret = today_rets.values @ load_normalized.values
-            
-            fac_rets.append(factor_ret)
-            loads.append(load)
-            dates.append(rets.index[t])
-
-        f_df = pd.DataFrame(fac_rets, index=dates,
-                            columns=[f"F{i+1}" for i in range(self.k)])
-        return f_df, loads[-1]
+        _LOGGER.info(f"Delegating to latent_factors.statistical_factors (Method: {stat_method.name})")
+        
+        # Call the centralized engine
+        # Note: statistical_factors handles residualization automatically
+        fac_rets, loadings = statistical_factors(
+            returns=rets,
+            n_components=self.k,
+            method=stat_method,
+            whiten=True
+        )
+        
+        return fac_rets, loadings

@@ -87,7 +87,7 @@ from typing import Tuple, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA, FastICA, NMF
+from sklearn.decomposition import PCA, FastICA, NMF, SparsePCA, FactorAnalysis
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 
@@ -420,6 +420,8 @@ class StatMethod(Enum):
     PCA = auto()   # Orthogonal by construction
     ICA = auto()   # Independent but NOT orthogonal - requires post-processing
     NMF = auto()   # Non-negative, not orthogonal
+    SPARSE_PCA = auto() # Sparse loadings
+    FACTOR_ANALYSIS = auto() # Classical factor analysis
 
 
 def statistical_factors(
@@ -448,6 +450,8 @@ def statistical_factors(
         - PCA: Fast, orthogonal, variance-maximizing
         - ICA: Independent components (auto-orthogonalized)
         - NMF: Non-negative decomposition
+        - SPARSE_PCA: Sparse loadings
+        - FACTOR_ANALYSIS: Classical factor analysis
     whiten : bool, default True
         Standardize returns before factor extraction
     skip_residualization : bool, default False
@@ -511,6 +515,12 @@ def statistical_factors(
         whiten_param = 'unit-variance' if whiten else False
         model = FastICA(n_components=n_components, random_state=0, whiten=whiten_param)
         needs_orthogonalization = True   # ICA factors are independent but correlated
+    elif method is StatMethod.SPARSE_PCA:
+        model = SparsePCA(n_components=n_components, random_state=0)
+        needs_orthogonalization = True
+    elif method is StatMethod.FACTOR_ANALYSIS:
+        model = FactorAnalysis(n_components=n_components, random_state=0)
+        needs_orthogonalization = True
     else:  # NMF
         X = returns.clip(lower=0).to_numpy()
         model = NMF(n_components=n_components, init="nndsvda", random_state=0,
