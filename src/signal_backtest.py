@@ -2,77 +2,32 @@
 Signal Backtesting Framework
 ============================
 
-This module provides backtesting capabilities for trading signals, enabling
-historical validation of signal efficacy before deployment. It supports
-walk-forward testing, performance attribution, and threshold optimization.
+Walk-forward backtesting for aggregated trading signals.
 
-Core Components
----------------
-
-**SignalBacktester**
-- Walk-forward signal testing
-- Performance attribution by signal type
-- Signal hit rate calculation
-- Drawdown period analysis
-- Threshold optimization
-
-Backtesting Methodologies
--------------------------
-
-**Walk-Forward Testing:**
-- Rolling window training and testing
-- Out-of-sample signal validation
-- Prevents overfitting to historical data
-
-**Performance Attribution:**
-- Returns by signal type
-- Hit rate (accuracy) calculation
-- Risk-adjusted performance metrics
-
-**Threshold Optimization:**
-- Grid search over signal thresholds
-- Sharpe ratio maximization
-- Drawdown minimization
-
-Architecture
-------------
-```
-Historical Data > Signal Generation > Walk-Forward Test > Performance Metrics
-       ↓                  ↓                      ↓                      ↓
-   [Returns]        [All Signals]         [Out-of-Sample]      [Sharpe/Hit Rate]
-```
-
-Dependencies
-------------
-- pandas, numpy: Data manipulation
-- signal_aggregator: SignalAggregator for signal generation
-
-Examples
---------
->>> from signal_backtest import SignalBacktester
->>> backtester = SignalBacktester(signal_aggregator, returns_data)
->>> results = backtester.run_backtest()
->>> print(f"Hit rate: {results['hit_rate']:.1%}")
->>> print(f"Sharpe ratio: {results['sharpe_ratio']:.2f}")
+Key upgrades in this implementation:
+- Signals are generated as-of date ``t`` and applied to realized returns at ``t+1``.
+- PnL is computed from entity-level weights and returns (not universe-average proxies).
+- Transaction costs are applied from daily turnover.
+- Trade provenance is captured in per-walk trade logs.
 """
 
 from __future__ import annotations
+
 import logging
-from typing import Dict, List, Optional, Tuple, Union, Any
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
 
 if not _LOGGER.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(levelname)s:%(name)s: %(message)s')
+    formatter = logging.Formatter("%(levelname)s:%(name)s: %(message)s")
     handler.setFormatter(formatter)
     _LOGGER.addHandler(handler)
     _LOGGER.propagate = False
@@ -80,6 +35,7 @@ if not _LOGGER.handlers:
 
 class BacktestMetric(Enum):
     """Enumeration of backtest performance metrics."""
+
     TOTAL_RETURN = "total_return"
     ANNUALIZED_RETURN = "annualized_return"
     VOLATILITY = "volatility"
@@ -95,6 +51,7 @@ class BacktestMetric(Enum):
 @dataclass
 class BacktestResult:
     """Data class representing backtest results."""
+
     start_date: datetime
     end_date: datetime
     total_return: float
@@ -113,11 +70,13 @@ class BacktestResult:
     equity_curve: pd.Series
     drawdown_series: pd.Series
     monthly_returns: pd.Series
+    trade_log: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 @dataclass
 class SignalPerformance:
     """Data class representing signal type performance."""
+
     signal_type: str
     num_signals: int
     hit_rate: float
@@ -128,385 +87,339 @@ class SignalPerformance:
 
 
 class SignalBacktester:
-    """
-    Backtesting framework for trading signals.
-
-    This class provides comprehensive backtesting capabilities for validating
-    signal efficacy historically. It supports walk-forward testing, performance
-    attribution, and threshold optimization.
-
-    Parameters
-    ----------
-    signal_aggregator : SignalAggregator
-        Signal aggregator with all analyzers configured
-    returns_data : pd.DataFrame
-        Historical returns data for backtesting
-    transaction_costs : float, default 0.001
-        Transaction costs as fraction (0.001 = 10 bps)
-
-    Attributes
-    ----------
-    aggregator : SignalAggregator
-        Signal aggregator reference
-    returns : pd.DataFrame
-        Historical returns data
-    transaction_costs : float
-        Transaction cost assumption
-    results : List[BacktestResult]
-        Historical backtest results
-
-    Methods
-    -------
-    run_backtest(train_size=252, test_size=63, n_walks=10)
-        Run walk-forward backtest
-    calculate_signal_hit_rate(signals, forward_returns)
-        Calculate accuracy by signal type
-    analyze_drawdown_periods(equity_curve)
-        Identify when signals fail
-    optimize_thresholds(metric='sharpe_ratio')
-        Find optimal signal thresholds
-    get_performance_attribution()
-        Break down performance by signal type
-    generate_backtest_report()
-        Generate comprehensive backtest report
-
-    Backtest Methodology
-    --------------------
-
-    **Walk-Forward Process:**
-    1. Split data into training and test periods
-    2. Train signal models on training data
-    3. Generate signals for test period
-    4. Calculate returns based on signals
-    5. Roll window forward and repeat
-    6. Aggregate results across all walks
-
-    **Signal Execution:**
-    - Signals executed at next period open
-    - Position held until signal changes
-    - Transaction costs applied on trades
-    - Equal-weighted portfolio assumption
-
-    **Performance Calculation:**
-    - Returns: Log returns for accuracy
-    - Risk: Annualized standard deviation
-    - Sharpe: (Return - Risk Free) / Volatility
-    - Drawdown: Peak-to-trough decline
-
-    Examples
-    --------
-    >>> # Initialize backtester
-    >>> backtester = SignalBacktester(aggregator, returns_data)
-    >>>
-    >>> # Run walk-forward backtest
-    >>> results = backtester.run_backtest(
-    ...     train_size=252,    # 1 year training
-    ...     test_size=63,      # 3 month test
-    ...     n_walks=10         # 10 walk-forward periods
-    ... )
-    >>>
-    >>> # Print key metrics
-    >>> print(f"Total Return: {results['total_return']:.1%}")
-    >>> print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
-    >>> print(f"Hit Rate: {results['hit_rate']:.1%}")
-    >>>
-    >>> # Analyze by signal type
-    >>> attribution = backtester.get_performance_attribution()
-    >>> for sig_type, perf in attribution.items():
-    ...     print(f"{sig_type}: {perf.hit_rate:.1%} hit rate")
-    >>>
-    >>> # Optimize thresholds
-    >>> optimal = backtester.optimize_thresholds(metric='sharpe_ratio')
-    >>> print(f"Optimal threshold: {optimal['threshold']:.2f}")
-    """
+    """Walk-forward backtester for multi-source consensus signals."""
 
     def __init__(
         self,
         signal_aggregator: Any,
         returns_data: pd.DataFrame,
-        transaction_costs: float = 0.001
+        transaction_costs: float = 0.001,
     ):
-        """
-        Initialize the SignalBacktester.
-
-        Parameters
-        ----------
-        signal_aggregator : SignalAggregator
-            Configured signal aggregator
-        returns_data : pd.DataFrame
-            Historical returns data
-        transaction_costs : float, default 0.001
-            Transaction costs as fraction
-        """
         self.aggregator = signal_aggregator
         self.returns = returns_data.copy()
         self.transaction_costs = transaction_costs
         self.results: List[BacktestResult] = []
+
+        if not isinstance(self.returns.index, pd.DatetimeIndex):
+            self.returns.index = pd.to_datetime(self.returns.index)
+        self.returns = self.returns.sort_index()
 
     def run_backtest(
         self,
         train_size: int = 252,
         test_size: int = 63,
         n_walks: int = 10,
-        min_confidence: float = 70.0
+        min_confidence: float = 70.0,
     ) -> Dict[str, float]:
-        """
-        Run walk-forward backtest.
+        """Run walk-forward backtest with train/test windows."""
+        if self.returns.empty:
+            raise ValueError("returns_data is empty")
+        if train_size <= 1 or test_size <= 1:
+            raise ValueError("train_size and test_size must both be > 1")
 
-        Parameters
-        ----------
-        train_size : int, default 252
-            Number of periods for training (252 ≈ 1 year)
-        test_size : int, default 63
-            Number of periods for testing (63 ≈ 3 months)
-        n_walks : int, default 10
-            Number of walk-forward iterations
-        min_confidence : float, default 70.0
-            Minimum signal confidence threshold
-
-        Returns
-        -------
-        Dict[str, float]
-            Aggregated backtest metrics
-
-        Examples
-        --------
-        >>> results = backtester.run_backtest(train_size=252, test_size=63)
-        >>> print(f"Sharpe: {results['sharpe_ratio']:.2f}")
-        """
         total_periods = len(self.returns)
-        walk_results = []
+        windows: List[Tuple[int, int, int]] = []
 
-        for i in range(n_walks):
-            # Calculate window boundaries
-            test_end = total_periods - i * test_size
-            test_start = test_end - test_size
-            train_start = max(0, test_start - train_size)
+        walk_start = 0
+        while walk_start + train_size + test_size <= total_periods:
+            train_start = walk_start
+            test_start = walk_start + train_size
+            test_end = test_start + test_size
+            windows.append((train_start, test_start, test_end))
+            walk_start += test_size
 
-            if test_start <= train_start:
-                _LOGGER.warning(f"Insufficient data for walk {i+1}, skipping")
-                continue
+        if not windows:
+            raise ValueError(
+                "Insufficient data for requested window sizes "
+                f"(have {total_periods}, need at least {train_size + test_size})"
+            )
 
-            # Extract data
+        # Prefer most recent windows when the user requests fewer walks.
+        selected_windows = windows[-n_walks:]
+
+        walk_results: List[BacktestResult] = []
+        for walk_idx, (train_start, test_start, test_end) in enumerate(selected_windows, start=1):
             train_returns = self.returns.iloc[train_start:test_start]
             test_returns = self.returns.iloc[test_start:test_end]
 
-            # Run single walk
-            result = self._run_single_walk(
-                train_returns, test_returns, min_confidence
-            )
-
-            if result is not None:
-                walk_results.append(result)
+            result = self._run_single_walk(train_returns, test_returns, min_confidence)
+            if result is None:
+                _LOGGER.warning("Walk %d produced no valid trades; skipping", walk_idx)
+                continue
+            walk_results.append(result)
 
         if not walk_results:
             raise ValueError("No valid backtest results generated")
 
         self.results = walk_results
-
-        # Aggregate results
         return self._aggregate_results(walk_results)
 
     def _run_single_walk(
         self,
         train_data: pd.DataFrame,
         test_data: pd.DataFrame,
-        min_confidence: float
+        min_confidence: float,
     ) -> Optional[BacktestResult]:
-        """Run a single walk-forward iteration."""
+        """Run one train/test walk-forward segment."""
         try:
-            # Generate signals for test period
-            # Note: In practice, you'd retrain models on train_data here
-            signals = self._generate_test_signals(test_data, min_confidence)
-
-            if not signals:
+            if len(train_data) < 2 or len(test_data) < 2:
                 return None
 
-            # Calculate strategy returns
-            strategy_returns = self._calculate_strategy_returns(
-                test_data, signals
-            )
+            signals = self._generate_test_signals(test_data, min_confidence=min_confidence)
+            strategy_returns, trade_log = self._calculate_strategy_returns(test_data, signals)
 
             if strategy_returns.empty:
                 return None
 
-            # Calculate metrics
-            return self._calculate_metrics(
-                strategy_returns, test_data, signals
+            benchmark_returns = (
+                test_data.mean(axis=1)
+                .shift(-1)
+                .reindex(strategy_returns.index)
+                .fillna(0.0)
             )
 
-        except Exception as e:
-            _LOGGER.error(f"Error in walk: {e}")
+            return self._calculate_metrics(
+                strategy_returns=strategy_returns,
+                benchmark_returns=benchmark_returns,
+                signals=signals,
+                trade_log=trade_log,
+            )
+        except Exception as exc:
+            _LOGGER.error("Error in walk: %s", exc)
             return None
+
+    def _direction_to_score(self, direction: str) -> float:
+        """Map direction labels to numeric signal strength."""
+        mapping = {
+            "strong_buy": 2.0,
+            "buy": 1.0,
+            "long": 1.0,
+            "neutral": 0.0,
+            "sell": -1.0,
+            "short": -1.0,
+            "strong_sell": -2.0,
+        }
+        return mapping.get(str(direction).lower(), 0.0)
 
     def _generate_test_signals(
         self,
         test_data: pd.DataFrame,
-        min_confidence: float
-    ) -> Dict[datetime, List[Dict]]:
-        """Generate signals for test period."""
-        signals_by_date = {}
+        min_confidence: float,
+    ) -> Dict[datetime, List[Dict[str, float]]]:
+        """Generate daily tradable signals for the test period."""
+        signals_by_date: Dict[datetime, List[Dict[str, float]]] = {}
+        tradable_entities = set(test_data.columns)
 
-        for date in test_data.index:
-            # Get consensus signals for this date
-            consensus = self.aggregator.aggregate_signals(date)
+        # No t+1 return exists for the final date in a test window.
+        for date in test_data.index[:-1]:
+            consensus = self.aggregator.aggregate_signals(date=pd.Timestamp(date))
+            qualified: List[Dict[str, float]] = []
 
-            # Filter by confidence
-            qualified = [
-                {
-                    'entity': k,
-                    'direction': v.consensus_direction.value,
-                    'confidence': v.confidence,
-                    'score': v.consensus_score
-                }
-                for k, v in consensus.items()
-                if v.confidence >= min_confidence
-            ]
+            for entity, signal in consensus.items():
+                direction = signal.consensus_direction.value
+                score = self._direction_to_score(direction)
+                confidence = float(signal.confidence)
+
+                if confidence < min_confidence:
+                    continue
+                if abs(score) < 1e-12:
+                    continue
+
+                # market_regime is a global overlay signal; all others must map to a return column.
+                if entity != "market_regime" and entity not in tradable_entities:
+                    continue
+
+                qualified.append(
+                    {
+                        "entity": entity,
+                        "direction": direction,
+                        "confidence": confidence,
+                        "score": float(signal.consensus_score),
+                    }
+                )
 
             if qualified:
                 signals_by_date[date] = qualified
 
         return signals_by_date
 
+    def _build_target_weights(
+        self,
+        date_signals: List[Dict[str, float]],
+        universe_columns: List[str],
+    ) -> pd.Series:
+        """Map qualified date signals into normalized target portfolio weights."""
+        entity_scores: Dict[str, float] = {}
+        global_scores: List[float] = []
+
+        for sig in date_signals:
+            direction_score = self._direction_to_score(sig["direction"])
+            if abs(direction_score) < 1e-12:
+                continue
+
+            confidence_scale = max(0.0, float(sig["confidence"])) / 100.0
+            signed_strength = direction_score * confidence_scale
+            entity = sig["entity"]
+
+            if entity == "market_regime":
+                global_scores.append(signed_strength)
+            elif entity in universe_columns:
+                entity_scores[entity] = entity_scores.get(entity, 0.0) + signed_strength
+
+        if not entity_scores and global_scores:
+            global_bias = float(np.mean(global_scores))
+            if abs(global_bias) > 1e-12:
+                weights = pd.Series(np.sign(global_bias), index=universe_columns, dtype=float)
+            else:
+                weights = pd.Series(dtype=float)
+        else:
+            weights = pd.Series(entity_scores, dtype=float)
+            if global_scores and not weights.empty:
+                # Apply a small global overlay tilt if regime signal is present.
+                weights += np.sign(float(np.mean(global_scores))) * 0.25
+
+        if weights.empty:
+            return weights
+
+        weights = weights[weights.abs() > 1e-12]
+        if weights.empty:
+            return weights
+
+        gross = float(weights.abs().sum())
+        if gross <= 0:
+            return pd.Series(dtype=float)
+
+        return weights / gross
+
     def _calculate_strategy_returns(
         self,
         test_data: pd.DataFrame,
-        signals: Dict[datetime, List[Dict]]
-    ) -> pd.Series:
-        """Calculate strategy returns from signals."""
-        strategy_returns = []
-        current_positions: Dict[str, str] = {}
+        signals: Dict[datetime, List[Dict[str, float]]],
+    ) -> Tuple[pd.Series, pd.DataFrame]:
+        """Compute daily strategy returns from target weights and next-day returns."""
+        columns = list(test_data.columns)
+        prev_weights = pd.Series(0.0, index=columns, dtype=float)
 
-        for date in test_data.index:
-            # Get returns for this date
-            if date in test_data.index:
-                date_idx = test_data.index.get_loc(date)
+        return_rows: List[Dict[str, float]] = []
+        trade_rows: List[Dict[str, float]] = []
 
-                if date_idx < len(test_data) - 1:
-                    # Use next period return (signal leads return)
-                    next_return = test_data.iloc[date_idx + 1].mean()
-                else:
-                    next_return = 0
+        for idx, signal_date in enumerate(test_data.index[:-1]):
+            next_date = test_data.index[idx + 1]
+            date_signals = signals.get(signal_date, [])
 
-                # Check for new signals
-                if date in signals:
-                    new_positions = {}
-                    for sig in signals[date]:
-                        entity = sig['entity']
-                        new_direction = sig['direction']
+            target_sparse = self._build_target_weights(date_signals, columns)
+            target_weights = pd.Series(0.0, index=columns, dtype=float)
+            if not target_sparse.empty:
+                target_weights.update(target_sparse)
 
-                        # Check if position changed
-                        if entity in current_positions:
-                            if current_positions[entity] != new_direction:
-                                # Apply transaction cost
-                                next_return -= self.transaction_costs
+            turnover = float((target_weights - prev_weights).abs().sum())
+            costs = turnover * self.transaction_costs
 
-                        new_positions[entity] = new_direction
+            next_returns = test_data.loc[next_date].fillna(0.0)
+            gross_return = float((target_weights * next_returns).sum())
+            net_return = gross_return - costs
 
-                    current_positions = new_positions
+            return_rows.append(
+                {
+                    "date": next_date,
+                    "return": net_return,
+                    "gross_return": gross_return,
+                    "transaction_cost": costs,
+                    "turnover": turnover,
+                }
+            )
 
-                # Calculate portfolio return based on positions
-                if current_positions:
-                    # Long positions contribute positively
-                    # Short positions contribute negatively
-                    long_count = sum(1 for d in current_positions.values() if 'buy' in d)
-                    short_count = sum(1 for d in current_positions.values() if 'sell' in d)
-                    total = len(current_positions)
+            for sig in date_signals:
+                entity = sig["entity"]
+                if entity not in target_weights.index:
+                    continue
+                weight = float(target_weights.loc[entity])
+                if abs(weight) < 1e-12:
+                    continue
 
-                    if total > 0:
-                        position_return = (
-                            (long_count / total) * next_return -
-                            (short_count / total) * next_return
-                        )
-                    else:
-                        position_return = 0
-                else:
-                    position_return = 0
+                realized = float(next_returns.loc[entity])
+                contribution = weight * realized
 
-                strategy_returns.append({
-                    'date': date,
-                    'return': position_return
-                })
+                trade_rows.append(
+                    {
+                        "signal_date": signal_date,
+                        "execution_date": next_date,
+                        "entity": entity,
+                        "direction": sig["direction"],
+                        "confidence": float(sig["confidence"]),
+                        "score": float(sig["score"]),
+                        "weight": weight,
+                        "asset_return": realized,
+                        "contribution": contribution,
+                    }
+                )
 
-        if not strategy_returns:
-            return pd.Series()
+            prev_weights = target_weights
 
-        returns_df = pd.DataFrame(strategy_returns)
-        returns_df.set_index('date', inplace=True)
+        if not return_rows:
+            return pd.Series(dtype=float), pd.DataFrame()
 
-        return returns_df['return']
+        returns_df = pd.DataFrame(return_rows).set_index("date")
+        trade_df = pd.DataFrame(trade_rows)
+
+        return returns_df["return"], trade_df
 
     def _calculate_metrics(
         self,
         strategy_returns: pd.Series,
-        benchmark_returns: pd.DataFrame,
-        signals: Dict[datetime, List[Dict]]
+        benchmark_returns: pd.Series,
+        signals: Dict[datetime, List[Dict[str, float]]],
+        trade_log: pd.DataFrame,
     ) -> BacktestResult:
-        """Calculate performance metrics."""
-        # Basic return metrics
-        total_return = (1 + strategy_returns).prod() - 1
+        """Compute walk-level performance metrics."""
+        total_return = float((1.0 + strategy_returns).prod() - 1.0)
 
-        # Annualized metrics
         n_periods = len(strategy_returns)
-        periods_per_year = 252  # Assuming daily data
-        years = n_periods / periods_per_year
+        periods_per_year = 252
+        years = max(n_periods / periods_per_year, 1.0 / periods_per_year)
 
-        annualized_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
-        volatility = strategy_returns.std() * np.sqrt(periods_per_year)
+        annualized_return = float((1.0 + total_return) ** (1.0 / years) - 1.0)
+        volatility = float(strategy_returns.std(ddof=0) * np.sqrt(periods_per_year))
 
-        # Risk-adjusted metrics
-        risk_free_rate = 0.02  # Assume 2% risk-free rate
+        risk_free_rate = 0.0
         sharpe_ratio = (
-            (annualized_return - risk_free_rate) / volatility
-            if volatility > 0 else 0
+            (annualized_return - risk_free_rate) / volatility if volatility > 0 else 0.0
         )
 
-        # Sortino ratio (downside deviation only)
-        downside_returns = strategy_returns[strategy_returns < 0]
-        downside_dev = downside_returns.std() * np.sqrt(periods_per_year)
+        downside = strategy_returns[strategy_returns < 0]
+        downside_dev = float(downside.std(ddof=0) * np.sqrt(periods_per_year))
         sortino_ratio = (
-            (annualized_return - risk_free_rate) / downside_dev
-            if downside_dev > 0 else 0
+            (annualized_return - risk_free_rate) / downside_dev if downside_dev > 0 else 0.0
         )
 
-        # Drawdown
-        cumulative = (1 + strategy_returns).cumprod()
-        running_max = cumulative.expanding().max()
-        drawdown = (cumulative - running_max) / running_max
-        max_drawdown = drawdown.min()
+        equity_curve = (1.0 + strategy_returns).cumprod()
+        running_max = equity_curve.cummax()
+        drawdown = (equity_curve - running_max) / running_max
+        max_drawdown = float(drawdown.min()) if not drawdown.empty else 0.0
 
-        # Calmar ratio
-        calmar_ratio = (
-            annualized_return / abs(max_drawdown)
-            if max_drawdown != 0 else 0
+        calmar_ratio = annualized_return / abs(max_drawdown) if max_drawdown < 0 else 0.0
+
+        hit_rate = float((strategy_returns > 0).mean())
+        gross_profits = float(strategy_returns[strategy_returns > 0].sum())
+        gross_losses = float(abs(strategy_returns[strategy_returns < 0].sum()))
+        profit_factor = gross_profits / gross_losses if gross_losses > 0 else float("inf")
+
+        avg_win = float(strategy_returns[strategy_returns > 0].mean())
+        avg_loss = float(abs(strategy_returns[strategy_returns < 0].mean()))
+        win_loss_ratio = avg_win / avg_loss if avg_loss > 0 else float("inf")
+
+        signal_attribution = self._calculate_signal_attribution(signals, trade_log)
+
+        monthly_returns = strategy_returns.resample("ME").apply(
+            lambda x: (1.0 + x).prod() - 1.0
         )
 
-        # Hit rate (percentage of positive returns)
-        hit_rate = (strategy_returns > 0).mean()
-
-        # Profit factor
-        gross_profits = strategy_returns[strategy_returns > 0].sum()
-        gross_losses = abs(strategy_returns[strategy_returns < 0].sum())
-        profit_factor = (
-            gross_profits / gross_losses
-            if gross_losses > 0 else float('inf')
-        )
-
-        # Win/loss ratio
-        avg_win = strategy_returns[strategy_returns > 0].mean()
-        avg_loss = abs(strategy_returns[strategy_returns < 0].mean())
-        win_loss_ratio = (
-            avg_win / avg_loss
-            if avg_loss > 0 else float('inf')
-        )
-
-        # Signal attribution
-        signal_attribution = self._calculate_signal_attribution(signals)
-
-        # Monthly returns
-        monthly_returns = strategy_returns.resample('ME').apply(
-            lambda x: (1 + x).prod() - 1
-        )
+        if trade_log.empty:
+            avg_trade_return = float(strategy_returns.mean())
+            num_trades = 0
+        else:
+            avg_trade_return = float(trade_log["contribution"].mean())
+            num_trades = int(len(trade_log))
 
         return BacktestResult(
             start_date=strategy_returns.index[0],
@@ -521,310 +434,229 @@ class SignalBacktester:
             hit_rate=hit_rate,
             profit_factor=profit_factor,
             win_loss_ratio=win_loss_ratio,
-            num_trades=len(signals),
-            avg_trade_return=strategy_returns.mean(),
+            num_trades=num_trades,
+            avg_trade_return=avg_trade_return,
             signal_attribution=signal_attribution,
-            equity_curve=(1 + strategy_returns).cumprod(),
+            equity_curve=equity_curve,
             drawdown_series=drawdown,
-            monthly_returns=monthly_returns
+            monthly_returns=monthly_returns,
+            trade_log=trade_log,
         )
 
     def _calculate_signal_attribution(
         self,
-        signals: Dict[datetime, List[Dict]]
+        signals: Dict[datetime, List[Dict[str, float]]],
+        trade_log: pd.DataFrame,
     ) -> Dict[str, Dict[str, float]]:
-        """Calculate performance attribution by signal type."""
-        # This is a simplified attribution
-        # In practice, you'd track which signal types contributed to each trade
+        """Compute attribution summary by traded entity."""
+        if trade_log.empty:
+            # Fallback attribution when no mapped trades were generated.
+            attribution: Dict[str, Dict[str, float]] = {}
+            for _, sigs in signals.items():
+                for sig in sigs:
+                    entity = str(sig["entity"])
+                    if entity not in attribution:
+                        attribution[entity] = {
+                            "count": 0.0,
+                            "avg_confidence": 0.0,
+                            "avg_score": 0.0,
+                        }
+                    attribution[entity]["count"] += 1.0
+                    attribution[entity]["avg_confidence"] += float(sig["confidence"])
+                    attribution[entity]["avg_score"] += float(sig["score"])
 
+            for entity, vals in attribution.items():
+                count = max(vals["count"], 1.0)
+                vals["avg_confidence"] /= count
+                vals["avg_score"] /= count
+            return attribution
+
+        grouped = trade_log.groupby("entity")
         attribution = {}
-
-        # Count signals by type
-        for date, sigs in signals.items():
-            for sig in sigs:
-                entity = sig['entity']
-                if entity not in attribution:
-                    attribution[entity] = {
-                        'count': 0,
-                        'avg_confidence': 0,
-                        'avg_score': 0
-                    }
-
-                attribution[entity]['count'] += 1
-                attribution[entity]['avg_confidence'] += sig['confidence']
-                attribution[entity]['avg_score'] += sig['score']
-
-        # Average the metrics
-        for entity in attribution:
-            count = attribution[entity]['count']
-            if count > 0:
-                attribution[entity]['avg_confidence'] /= count
-                attribution[entity]['avg_score'] /= count
-
+        for entity, g in grouped:
+            attribution[str(entity)] = {
+                "count": float(len(g)),
+                "avg_confidence": float(g["confidence"].mean()),
+                "avg_score": float(g["score"].mean()),
+                "total_contribution": float(g["contribution"].sum()),
+                "hit_rate": float((g["contribution"] > 0).mean()),
+            }
         return attribution
 
-    def _aggregate_results(
-        self,
-        results: List[BacktestResult]
-    ) -> Dict[str, float]:
-        """Aggregate results across all walks."""
+    def _aggregate_results(self, results: List[BacktestResult]) -> Dict[str, float]:
+        """Aggregate walk-level results into a summary dictionary."""
         if not results:
             return {}
 
-        metrics = {
-            'total_return': np.mean([r.total_return for r in results]),
-            'annualized_return': np.mean([r.annualized_return for r in results]),
-            'volatility': np.mean([r.volatility for r in results]),
-            'sharpe_ratio': np.mean([r.sharpe_ratio for r in results]),
-            'sortino_ratio': np.mean([r.sortino_ratio for r in results]),
-            'max_drawdown': np.mean([r.max_drawdown for r in results]),
-            'calmar_ratio': np.mean([r.calmar_ratio for r in results]),
-            'hit_rate': np.mean([r.hit_rate for r in results]),
-            'profit_factor': np.mean([r.profit_factor for r in results]),
-            'win_loss_ratio': np.mean([r.win_loss_ratio for r in results]),
-            'num_trades': sum([r.num_trades for r in results]),
-            'avg_trade_return': np.mean([r.avg_trade_return for r in results]),
-            'num_walks': len(results)
-        }
+        def _mean(values: List[float]) -> float:
+            arr = np.asarray(values, dtype=float)
+            return float(np.nanmean(arr))
 
-        return metrics
+        return {
+            "total_return": _mean([r.total_return for r in results]),
+            "annualized_return": _mean([r.annualized_return for r in results]),
+            "volatility": _mean([r.volatility for r in results]),
+            "sharpe_ratio": _mean([r.sharpe_ratio for r in results]),
+            "sortino_ratio": _mean([r.sortino_ratio for r in results]),
+            "max_drawdown": _mean([r.max_drawdown for r in results]),
+            "calmar_ratio": _mean([r.calmar_ratio for r in results]),
+            "hit_rate": _mean([r.hit_rate for r in results]),
+            "profit_factor": _mean([r.profit_factor for r in results]),
+            "win_loss_ratio": _mean([r.win_loss_ratio for r in results]),
+            "num_trades": float(sum(r.num_trades for r in results)),
+            "avg_trade_return": _mean([r.avg_trade_return for r in results]),
+            "num_walks": float(len(results)),
+        }
 
     def calculate_signal_hit_rate(
         self,
         signals: Optional[Dict] = None,
-        forward_returns: Optional[pd.Series] = None
+        forward_returns: Optional[pd.Series] = None,
     ) -> Dict[str, float]:
-        """
-        Calculate hit rate (accuracy) by signal type.
+        """Calculate hit-rate by entity from trade logs or supplied signals."""
+        if self.results:
+            logs = [r.trade_log for r in self.results if not r.trade_log.empty]
+            if logs:
+                trades = pd.concat(logs, ignore_index=True)
+                return (
+                    trades.groupby("entity")["contribution"]
+                    .apply(lambda x: float((x > 0).mean()))
+                    .to_dict()
+                )
 
-        Parameters
-        ----------
-        signals : Dict, optional
-            Pre-generated signals
-        forward_returns : pd.Series, optional
-            Forward returns for hit rate calculation
-
-        Returns
-        -------
-        Dict[str, float]
-            Hit rate by signal type
-
-        Examples
-        --------
-        >>> hit_rates = backtester.calculate_signal_hit_rate()
-        >>> for sig_type, rate in hit_rates.items():
-        ...     print(f"{sig_type}: {rate:.1%}")
-        """
         if signals is None:
             signals = self.aggregator.aggregate_signals()
 
-        hit_rates = {}
-
+        hit_rates: Dict[str, float] = {}
         for entity, consensus in signals.items():
-            # Count correct predictions
-            correct = 0
-            total = len(consensus.contributing_signals)
+            if forward_returns is None or entity not in getattr(forward_returns, "index", []):
+                hit_rates[entity] = 0.0
+                continue
 
-            for signal in consensus.contributing_signals:
-                # Simplified hit rate calculation
-                # In practice, compare signal direction to actual return
-                if signal.confidence > 70:
-                    correct += 1
-
-            hit_rates[entity] = correct / total if total > 0 else 0
+            direction = self._direction_to_score(consensus.consensus_direction.value)
+            realized = float(forward_returns.loc[entity])
+            hit_rates[entity] = 1.0 if direction * realized > 0 else 0.0
 
         return hit_rates
 
     def analyze_drawdown_periods(
         self,
-        equity_curve: Optional[pd.Series] = None
+        equity_curve: Optional[pd.Series] = None,
     ) -> pd.DataFrame:
-        """
-        Analyze drawdown periods to understand when signals fail.
-
-        Parameters
-        ----------
-        equity_curve : pd.Series, optional
-            Equity curve to analyze
-
-        Returns
-        -------
-        pd.DataFrame
-            Drawdown period analysis
-
-        Examples
-        --------
-        >>> drawdowns = backtester.analyze_drawdown_periods()
-        >>> print(drawdowns[['start', 'end', 'depth']])
-        """
+        """Analyze drawdown periods to identify stress windows."""
         if equity_curve is None and self.results:
             equity_curve = self.results[0].equity_curve
 
         if equity_curve is None or equity_curve.empty:
             return pd.DataFrame()
 
-        # Calculate drawdown
         running_max = equity_curve.expanding().max()
         drawdown = (equity_curve - running_max) / running_max
+        is_drawdown = drawdown < -0.05
 
-        # Identify drawdown periods
-        is_drawdown = drawdown < -0.05  # 5% threshold
-
-        periods = []
+        periods: List[Dict[str, Any]] = []
         in_drawdown = False
         start_date = None
 
-        for date, dd in drawdown.items():
+        for date, _ in drawdown.items():
             if is_drawdown.loc[date] and not in_drawdown:
                 in_drawdown = True
                 start_date = date
             elif not is_drawdown.loc[date] and in_drawdown:
                 in_drawdown = False
-                periods.append({
-                    'start': start_date,
-                    'end': date,
-                    'depth': drawdown.loc[start_date:date].min(),
-                    'duration': (date - start_date).days
-                })
+                periods.append(
+                    {
+                        "start": start_date,
+                        "end": date,
+                        "depth": float(drawdown.loc[start_date:date].min()),
+                        "duration": (date - start_date).days,
+                    }
+                )
 
         return pd.DataFrame(periods)
 
     def optimize_thresholds(
         self,
-        metric: str = 'sharpe_ratio',
+        metric: str = "sharpe_ratio",
         threshold_range: Tuple[float, float] = (50.0, 95.0),
-        n_steps: int = 10
+        n_steps: int = 10,
     ) -> Dict[str, Any]:
-        """
-        Optimize signal confidence thresholds.
-
-        Parameters
-        ----------
-        metric : str, default 'sharpe_ratio'
-            Metric to optimize ('sharpe_ratio', 'total_return', 'hit_rate')
-        threshold_range : Tuple[float, float], default (50.0, 95.0)
-            Range of thresholds to test
-        n_steps : int, default 10
-            Number of threshold values to test
-
-        Returns
-        -------
-        Dict[str, Any]
-            Optimization results with optimal threshold
-
-        Examples
-        --------
-        >>> optimal = backtester.optimize_thresholds(metric='sharpe_ratio')
-        >>> print(f"Optimal threshold: {optimal['threshold']:.1f}")
-        >>> print(f"Best Sharpe: {optimal['best_metric_value']:.2f}")
-        """
+        """Grid-search confidence thresholds for backtest performance."""
         thresholds = np.linspace(threshold_range[0], threshold_range[1], n_steps)
+        optimization_rows: List[Dict[str, float]] = []
 
-        results = []
         for threshold in thresholds:
             try:
                 backtest_result = self.run_backtest(
                     train_size=252,
                     test_size=63,
                     n_walks=5,
-                    min_confidence=threshold
+                    min_confidence=float(threshold),
                 )
+                optimization_rows.append(
+                    {
+                        "threshold": float(threshold),
+                        "sharpe_ratio": float(backtest_result.get("sharpe_ratio", 0.0)),
+                        "total_return": float(backtest_result.get("total_return", 0.0)),
+                        "hit_rate": float(backtest_result.get("hit_rate", 0.0)),
+                        "max_drawdown": float(backtest_result.get("max_drawdown", 0.0)),
+                    }
+                )
+            except Exception as exc:
+                _LOGGER.warning("Error at threshold %.2f: %s", threshold, exc)
 
-                results.append({
-                    'threshold': threshold,
-                    'sharpe_ratio': backtest_result.get('sharpe_ratio', 0),
-                    'total_return': backtest_result.get('total_return', 0),
-                    'hit_rate': backtest_result.get('hit_rate', 0),
-                    'max_drawdown': backtest_result.get('max_drawdown', 0)
-                })
-            except Exception as e:
-                _LOGGER.warning(f"Error at threshold {threshold}: {e}")
+        if not optimization_rows:
+            return {"error": "No valid results generated"}
 
-        if not results:
-            return {'error': 'No valid results generated'}
+        results_df = pd.DataFrame(optimization_rows)
 
-        results_df = pd.DataFrame(results)
-
-        # Find optimal threshold
-        if metric == 'sharpe_ratio':
-            best_idx = results_df['sharpe_ratio'].idxmax()
-        elif metric == 'total_return':
-            best_idx = results_df['total_return'].idxmax()
-        elif metric == 'hit_rate':
-            best_idx = results_df['hit_rate'].idxmax()
+        if metric == "total_return":
+            best_idx = int(results_df["total_return"].idxmax())
+        elif metric == "hit_rate":
+            best_idx = int(results_df["hit_rate"].idxmax())
         else:
-            best_idx = results_df['sharpe_ratio'].idxmax()
+            best_idx = int(results_df["sharpe_ratio"].idxmax())
 
         return {
-            'threshold': results_df.loc[best_idx, 'threshold'],
-            'best_metric_value': results_df.loc[best_idx, metric],
-            'all_results': results_df.to_dict('records'),
-            'metric_optimized': metric
+            "threshold": float(results_df.loc[best_idx, "threshold"]),
+            "best_metric_value": float(results_df.loc[best_idx, metric]),
+            "all_results": results_df.to_dict("records"),
+            "metric_optimized": metric,
         }
 
     def get_performance_attribution(self) -> Dict[str, SignalPerformance]:
-        """
-        Get performance attribution by signal type.
-
-        Returns
-        -------
-        Dict[str, SignalPerformance]
-            Performance metrics by signal type
-
-        Examples
-        --------
-        >>> attribution = backtester.get_performance_attribution()
-        >>> for sig_type, perf in attribution.items():
-        ...     print(f"{sig_type}: {perf.hit_rate:.1%} hit rate")
-        """
+        """Return per-entity performance attribution across all walks."""
         if not self.results:
             return {}
 
-        attribution = {}
+        logs = [r.trade_log for r in self.results if not r.trade_log.empty]
+        if not logs:
+            return {}
 
-        for result in self.results:
-            for entity, metrics in result.signal_attribution.items():
-                if entity not in attribution:
-                    attribution[entity] = {
-                        'count': 0,
-                        'total_confidence': 0,
-                        'total_score': 0
-                    }
+        trades = pd.concat(logs, ignore_index=True)
+        performance: Dict[str, SignalPerformance] = {}
 
-                attribution[entity]['count'] += metrics['count']
-                attribution[entity]['total_confidence'] += metrics['avg_confidence']
-                attribution[entity]['total_score'] += metrics['avg_score']
+        for entity, g in trades.groupby("entity"):
+            pnl = g["contribution"]
+            vol = float(pnl.std(ddof=0))
+            sharpe = float((pnl.mean() / vol) * np.sqrt(252)) if vol > 0 else 0.0
+            cumulative = (1.0 + pnl).cumprod()
+            dd = (cumulative - cumulative.cummax()) / cumulative.cummax()
 
-        # Create SignalPerformance objects
-        performance = {}
-        for entity, data in attribution.items():
-            count = data['count']
-            performance[entity] = SignalPerformance(
-                signal_type=entity,
-                num_signals=count,
-                hit_rate=0.5,  # Placeholder
-                avg_return=0.0,  # Placeholder
-                total_return=0.0,  # Placeholder
-                sharpe_ratio=0.0,  # Placeholder
-                max_drawdown=0.0  # Placeholder
+            performance[str(entity)] = SignalPerformance(
+                signal_type=str(entity),
+                num_signals=int(len(g)),
+                hit_rate=float((pnl > 0).mean()),
+                avg_return=float(pnl.mean()),
+                total_return=float(pnl.sum()),
+                sharpe_ratio=sharpe,
+                max_drawdown=float(dd.min()) if not dd.empty else 0.0,
             )
 
         return performance
 
     def generate_backtest_report(self) -> str:
-        """
-        Generate comprehensive backtest report.
-
-        Returns
-        -------
-        str
-            Formatted backtest report
-
-        Examples
-        --------
-        >>> report = backtester.generate_backtest_report()
-        >>> print(report)
-        """
+        """Generate a text backtest report."""
         if not self.results:
             return "No backtest results available. Run run_backtest() first."
 
@@ -859,50 +691,38 @@ class SignalBacktester:
             f"Number of Walks:       {aggregated['num_walks']:>10.0f}",
         ]
 
-        # Add individual walk results
-        for i, result in enumerate(self.results):
-            lines.append(f"\nWalk {i+1}: {result.start_date.date()} to {result.end_date.date()}")
-            lines.append(f"  Return: {result.total_return:>8.2%} | Sharpe: {result.sharpe_ratio:>6.2f} | Trades: {result.num_trades}")
+        for i, result in enumerate(self.results, start=1):
+            lines.append(f"\nWalk {i}: {result.start_date.date()} to {result.end_date.date()}")
+            lines.append(
+                f"  Return: {result.total_return:>8.2%} | "
+                f"Sharpe: {result.sharpe_ratio:>6.2f} | "
+                f"Trades: {result.num_trades:>4d}"
+            )
 
-        lines.extend([
-            "",
-            "=" * 70
-        ])
-
+        lines.extend(["", "=" * 70])
         return "\n".join(lines)
 
     def export_results_to_csv(self, filepath: str) -> None:
-        """
-        Export backtest results to CSV.
-
-        Parameters
-        ----------
-        filepath : str
-            Path to output CSV file
-
-        Examples
-        --------
-        >>> backtester.export_results_to_csv('backtest_results.csv')
-        """
+        """Export walk-level summary results to CSV."""
         if not self.results:
             _LOGGER.warning("No results to export")
             return
 
-        data = []
-        for result in self.results:
-            data.append({
-                'start_date': result.start_date,
-                'end_date': result.end_date,
-                'total_return': result.total_return,
-                'annualized_return': result.annualized_return,
-                'volatility': result.volatility,
-                'sharpe_ratio': result.sharpe_ratio,
-                'sortino_ratio': result.sortino_ratio,
-                'max_drawdown': result.max_drawdown,
-                'hit_rate': result.hit_rate,
-                'num_trades': result.num_trades
-            })
+        rows = [
+            {
+                "start_date": result.start_date,
+                "end_date": result.end_date,
+                "total_return": result.total_return,
+                "annualized_return": result.annualized_return,
+                "volatility": result.volatility,
+                "sharpe_ratio": result.sharpe_ratio,
+                "sortino_ratio": result.sortino_ratio,
+                "max_drawdown": result.max_drawdown,
+                "hit_rate": result.hit_rate,
+                "num_trades": result.num_trades,
+            }
+            for result in self.results
+        ]
 
-        df = pd.DataFrame(data)
-        df.to_csv(filepath, index=False)
-        _LOGGER.info(f"Exported {len(df)} results to {filepath}")
+        pd.DataFrame(rows).to_csv(filepath, index=False)
+        _LOGGER.info("Exported %d results to %s", len(rows), filepath)

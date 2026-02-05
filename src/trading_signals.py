@@ -247,6 +247,32 @@ class FactorMomentumAnalyzer:
                 f"minimum recommended is {min_required}"
             )
 
+    def _resolve_date_index(self, date: Optional[pd.Timestamp]) -> int:
+        """
+        Resolve an as-of date to the nearest available index position <= date.
+
+        Parameters
+        ----------
+        date : pd.Timestamp | None
+            Target as-of date. If None, returns the latest index.
+
+        Returns
+        -------
+        int
+            Integer position in `self.factor_returns.index`.
+        """
+        if date is None:
+            return len(self.factor_returns.index) - 1
+
+        ts = pd.Timestamp(date)
+        loc = self.factor_returns.index.searchsorted(ts, side="right") - 1
+        if loc < 0:
+            raise ValueError(
+                f"As-of date {ts.date()} is before first observation "
+                f"{self.factor_returns.index[0].date()}"
+            )
+        return int(loc)
+
     def calculate_rsi(self, factor_name: str, period: int = 14) -> pd.Series:
         """
         Calculate Relative Strength Index (RSI) for a factor.
@@ -508,7 +534,8 @@ class FactorMomentumAnalyzer:
         self,
         factor_name: str,
         adx_threshold: float = 25.0,
-        rsi_period: int = 14
+        rsi_period: int = 14,
+        date: Optional[pd.Timestamp] = None
     ) -> MomentumRegime:
         """
         Detect the current momentum regime for a factor.
@@ -524,6 +551,8 @@ class FactorMomentumAnalyzer:
             ADX level to distinguish trending from mean-reverting
         rsi_period : int, default 14
             Period for RSI calculation
+        date : pd.Timestamp, optional
+            As-of date for regime detection. Uses data up to and including date.
 
         Returns
         -------
@@ -554,12 +583,14 @@ class FactorMomentumAnalyzer:
         if factor_name not in self.factor_returns.columns:
             raise ValueError(f"Factor '{factor_name}' not found in returns")
 
-        # Get latest values
-        adx = self.calculate_adx(factor_name).iloc[-1]
-        rsi = self.calculate_rsi(factor_name, period=rsi_period).iloc[-1]
+        idx = self._resolve_date_index(date)
+
+        # Get as-of values
+        adx = self.calculate_adx(factor_name).iloc[idx]
+        rsi = self.calculate_rsi(factor_name, period=rsi_period).iloc[idx]
 
         # Get recent momentum direction from ROC
-        roc = self.calculate_roc(factor_name, periods=[21]).iloc[-1, 0]
+        roc = self.calculate_roc(factor_name, periods=[21]).iloc[idx, 0]
 
         if pd.isna(adx) or pd.isna(rsi):
             return MomentumRegime.NEUTRAL
@@ -738,7 +769,8 @@ class FactorMomentumAnalyzer:
         self,
         factor_name: str,
         z_threshold: float = 2.0,
-        percentile_threshold: float = 95.0
+        percentile_threshold: float = 95.0,
+        date: Optional[pd.Timestamp] = None
     ) -> Optional[ExtremeAlert]:
         """
         Check if a factor is at extreme levels and generate alert.
@@ -754,6 +786,8 @@ class FactorMomentumAnalyzer:
             Z-score threshold for extreme detection
         percentile_threshold : float, default 95.0
             Percentile threshold for extreme detection
+        date : pd.Timestamp, optional
+            As-of date for extreme detection. Uses data up to date.
 
         Returns
         -------
@@ -775,10 +809,12 @@ class FactorMomentumAnalyzer:
         if factor_name not in self.factor_returns.columns:
             raise ValueError(f"Factor '{factor_name}' not found in returns")
 
+        idx = self._resolve_date_index(date)
+
         # Calculate metrics
-        zscore = self.calculate_zscore(factor_name).iloc[-1]
-        percentile = self.get_percentile_rank(factor_name).iloc[-1]
-        current_value = self.factor_returns[factor_name].iloc[-1]
+        zscore = self.calculate_zscore(factor_name).iloc[idx]
+        percentile = self.get_percentile_rank(factor_name).iloc[idx]
+        current_value = self.factor_returns[factor_name].iloc[idx]
 
         if pd.isna(zscore) or pd.isna(percentile):
             return None
@@ -814,13 +850,14 @@ class FactorMomentumAnalyzer:
             current_value=current_value,
             threshold=z_threshold,
             direction=direction,
-            timestamp=self.factor_returns.index[-1]
+            timestamp=self.factor_returns.index[idx]
         )
 
     def get_all_extreme_alerts(
         self,
         z_threshold: float = 2.0,
-        percentile_threshold: float = 95.0
+        percentile_threshold: float = 95.0,
+        date: Optional[pd.Timestamp] = None
     ) -> List[ExtremeAlert]:
         """
         Get extreme alerts for all factors.
@@ -831,6 +868,8 @@ class FactorMomentumAnalyzer:
             Z-score threshold for extreme detection
         percentile_threshold : float, default 95.0
             Percentile threshold for extreme detection
+        date : pd.Timestamp, optional
+            As-of date for alert generation.
 
         Returns
         -------
@@ -840,7 +879,10 @@ class FactorMomentumAnalyzer:
         alerts = []
         for factor_name in self.factor_returns.columns:
             alert = self.check_extreme_levels(
-                factor_name, z_threshold, percentile_threshold
+                factor_name,
+                date=date,
+                z_threshold=z_threshold,
+                percentile_threshold=percentile_threshold
             )
             if alert:
                 alerts.append(alert)
@@ -869,20 +911,14 @@ class FactorMomentumAnalyzer:
         if factor_name not in self.factor_returns.columns:
             raise ValueError(f"Factor '{factor_name}' not found in returns")
 
-        if date is None:
-            date = self.factor_returns.index[-1]
+        idx = self._resolve_date_index(date)
+        as_of_date = self.factor_returns.index[idx]
 
         # Calculate all indicators
         rsi = self.calculate_rsi(factor_name)
         macd_line, signal_line, histogram = self.calculate_macd(factor_name)
         adx = self.calculate_adx(factor_name)
         roc = self.calculate_roc(factor_name)
-
-        # Get values for specified date (or latest)
-        try:
-            idx = self.factor_returns.index.get_loc(date)
-        except KeyError:
-            idx = -1
 
         # RSI signal
         rsi_val = rsi.iloc[idx]
@@ -923,11 +959,11 @@ class FactorMomentumAnalyzer:
             adx_signal = 'transition'
 
         # Regime
-        regime = self.detect_momentum_regime(factor_name)
+        regime = self.detect_momentum_regime(factor_name, date=as_of_date)
 
         return {
             'factor': factor_name,
-            'date': date,
+            'date': as_of_date,
             'rsi': rsi_val,
             'rsi_signal': rsi_signal,
             'macd': macd_val,

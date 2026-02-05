@@ -467,9 +467,28 @@ class RegimeDetector:
         # Cache regime masks for conditional optimization
         self._cache_regime_masks()
 
-    def detect_current_regime(self) -> RegimeState:
+    def _get_history_as_of(self, as_of: Optional[pd.Timestamp]) -> pd.DataFrame:
+        """Return factor returns truncated to an as-of timestamp."""
+        if as_of is None:
+            return self.factor_returns
+
+        ts = pd.Timestamp(as_of)
+        history = self.factor_returns.loc[self.factor_returns.index <= ts]
+        if history.empty:
+            raise ValueError(
+                f"As-of date {ts.date()} is before first observation "
+                f"{self.factor_returns.index.min().date()}"
+            )
+        return history
+
+    def detect_current_regime(self, as_of: Optional[pd.Timestamp] = None) -> RegimeState:
         """
         Detect the current market regime.
+
+        Parameters
+        ----------
+        as_of : pd.Timestamp, optional
+            As-of timestamp for walk-forward usage. If omitted, uses latest data.
 
         Returns
         -------
@@ -484,8 +503,10 @@ class RegimeDetector:
         if self.hmm_model is None:
             raise RuntimeError("HMM not fitted. Call fit_hmm() first.")
 
+        history = self._get_history_as_of(as_of)
+
         # Get latest observation
-        latest = self.factor_returns.iloc[-1:].values
+        latest = history.iloc[-1:].values
         latest_scaled = self.scaler.transform(latest)
 
         # Predict state probabilities using predict_proba for normalized probabilities
@@ -498,7 +519,7 @@ class RegimeDetector:
         regime = self.regime_labels.get(most_likely_state, MarketRegime.UNKNOWN)
 
         # Calculate recent volatility and trend
-        recent_returns = self.factor_returns.iloc[-63:]  # Last 3 months
+        recent_returns = history.iloc[-63:]  # Last 3 months (as-of)
         volatility = recent_returns.std().mean()
         trend = recent_returns.mean().mean()
 
@@ -521,9 +542,14 @@ class RegimeDetector:
             description=descriptions.get(regime, "Unknown")
         )
 
-    def get_regime_probabilities(self) -> Dict[MarketRegime, float]:
+    def get_regime_probabilities(self, as_of: Optional[pd.Timestamp] = None) -> Dict[MarketRegime, float]:
         """
         Get probability distribution over all regimes.
+
+        Parameters
+        ----------
+        as_of : pd.Timestamp, optional
+            As-of timestamp for walk-forward usage.
 
         Returns
         -------
@@ -539,8 +565,10 @@ class RegimeDetector:
         if self.hmm_model is None:
             raise RuntimeError("HMM not fitted. Call fit_hmm() first.")
 
+        history = self._get_history_as_of(as_of)
+
         # Get latest observation
-        latest = self.factor_returns.iloc[-1:].values
+        latest = history.iloc[-1:].values
         latest_scaled = self.scaler.transform(latest)
 
         # Get state probabilities using predict_proba
@@ -864,9 +892,14 @@ class RegimeDetector:
         total = sum(weights.values())
         return {k: v/total for k, v in weights.items()}
 
-    def generate_regime_signals(self) -> RegimeAllocation:
+    def generate_regime_signals(self, as_of: Optional[pd.Timestamp] = None) -> RegimeAllocation:
         """
         Generate allocation adjustment signals based on current regime.
+
+        Parameters
+        ----------
+        as_of : pd.Timestamp, optional
+            As-of timestamp for walk-forward usage.
 
         Returns
         -------
@@ -879,7 +912,7 @@ class RegimeDetector:
         >>> print(f"Risk-on score: {allocation.risk_on_score:.2f}")
         >>> print(f"Action: {allocation.recommended_action}")
         """
-        current = self.detect_current_regime()
+        current = self.detect_current_regime(as_of=as_of)
         optimal_factors = self.get_regime_optimal_factors(current.regime)
 
         # Calculate risk-on score
@@ -947,15 +980,18 @@ class RegimeDetector:
         # Get transition matrix from HMM
         transmat = self.hmm_model.transmat_
 
-        # Create labeled DataFrame
-        states = list(self.regime_labels.keys())
-        labels = [self.regime_labels[s].value for s in states]
+        # Create a labeled DataFrame.
+        #
+        # IMPORTANT: Multiple HMM states can map to the same MarketRegime label,
+        # which would create duplicate index/column names and ambiguous `.loc`
+        # behavior. Keep labels unique by including the underlying state id.
+        states = list(range(self.hmm_model.n_components))
+        labels = [
+            f"{self.regime_labels.get(s, MarketRegime.UNKNOWN).value} (state {s})"
+            for s in states
+        ]
 
-        transition_df = pd.DataFrame(
-            transmat[np.ix_(states, states)],
-            index=labels,
-            columns=labels
-        )
+        transition_df = pd.DataFrame(transmat, index=labels, columns=labels)
 
         return transition_df
 

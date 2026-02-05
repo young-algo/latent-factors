@@ -270,13 +270,13 @@ def run_discovery(symbols: str, start_date: str = "2020-04-01",
         fac_frames, load_frames = [], []
         for t in range(rolling, len(returns), rolling):
             sub = returns.iloc[t - rolling:t]
-            fac, load = _fit(sub, args)
+            fac, load = _fit(sub, args, cache_backend=frs)
             fac_frames.append(fac)
             load_frames.append(load)
         factor_ret = pd.concat(fac_frames)
         loadings = load_frames[-1]
     else:
-        factor_ret, loadings = _fit(returns, args)
+        factor_ret, loadings = _fit(returns, args, cache_backend=frs)
 
     # ------------------- Factor Validation -------------------- #
     logging.info("Validating factor quality...")
@@ -384,9 +384,10 @@ def _fit(ret: pd.DataFrame, args: argparse.Namespace, cache_backend=None):
         - method: Factor discovery method ("PCA", "ICA", "NMF", "AE")
         - k: Number of factors to extract
         
-    cache_backend : AlphaVantageBackend, optional
+    cache_backend : DataBackend-compatible, optional
         Pre-initialized backend for efficient benchmark data fetching.
-        If None, a new backend will be created.
+        If None, benchmark residualization will attempt to initialize a backend
+        from configuration (and will skip residualization if unavailable).
         
     Returns
     -------

@@ -97,7 +97,10 @@ Notes
 import os, textwrap, logging, time, json
 from typing import List, Dict, Sequence, Optional
 
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover - optional dependency
+    OpenAI = None  # type: ignore
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -113,7 +116,7 @@ load_dotenv()
 
 # Initialize OpenAI client only if API key is available
 openai_api_key = os.getenv("OPENAI_API_KEY")
-if openai_api_key:
+if openai_api_key and OpenAI is not None:
     client = OpenAI(api_key=openai_api_key)
 else:
     client = None
@@ -596,6 +599,9 @@ def validate_api_key() -> bool:
         True if API key is available and appears valid
     """
     if not openai_api_key:
+        return False
+    if OpenAI is None:
+        _LOG.error("openai package is not installed")
         return False
         
     try:

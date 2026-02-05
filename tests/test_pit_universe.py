@@ -54,6 +54,13 @@ from src.database import get_db_connection, ensure_schema
 @pytest.fixture(scope="module")
 def api_key():
     """Get Alpha Vantage API key from environment."""
+    build_enabled = os.getenv("PIT_TEST_BUILD_UNIVERSE", "").lower() in ("true", "1", "yes")
+    if not build_enabled:
+        pytest.skip(
+            "PIT integration tests that build universes are disabled by default. "
+            "Set PIT_TEST_BUILD_UNIVERSE=true to enable (requires Alpha Vantage network access)."
+        )
+
     key = config.ALPHAVANTAGE_API_KEY
     if not key:
         pytest.skip("ALPHAVANTAGE_API_KEY not configured")
@@ -251,13 +258,14 @@ class TestPITUniverseFeatures:
 class TestPITIntegrationWithResearch:
     """Tests for PIT integration with FactorResearchSystem."""
     
-    def test_get_backtest_universe_method_exists(self, backend, api_key, db_path):
+    def test_get_backtest_universe_method_exists(self, db_path):
         """Verify FactorResearchSystem has the get_backtest_universe method."""
         from src.research import FactorResearchSystem
         
         frs = FactorResearchSystem(
-            api_key=api_key,
-            universe=["SPY"],
+            api_key="DUMMY",
+            universe=["AAPL"],
+            expand_etfs=False,
             db_path=db_path
         )
         
@@ -271,13 +279,14 @@ class TestPITIntegrationWithResearch:
             "get_backtest_universe is not callable"
         )
     
-    def test_verify_pit_universe_method_exists(self, backend, api_key, db_path):
+    def test_verify_pit_universe_method_exists(self, db_path):
         """Verify FactorResearchSystem has the verify_pit_universe method."""
         from src.research import FactorResearchSystem
         
         frs = FactorResearchSystem(
-            api_key=api_key,
-            universe=["SPY"],
+            api_key="DUMMY",
+            universe=["AAPL"],
+            expand_etfs=False,
             db_path=db_path
         )
         

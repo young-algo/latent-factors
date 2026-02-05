@@ -93,16 +93,43 @@ from sklearn.linear_model import LinearRegression
 
 # Lazy imports for data fetching - only loaded when needed
 def _get_data_backend():
-    """Lazy import to avoid circular dependencies."""
+    """
+    Lazy import to avoid circular dependencies.
+
+    Returns a `DataBackend` instance only when `ALPHAVANTAGE_API_KEY` is
+    configured. Otherwise returns None and benchmark residualization will
+    be skipped.
+
+    Note
+    ----
+    Callers should prefer passing an existing backend via the `cache_backend`
+    parameter to avoid repeated initialization and duplicate API calls.
+    """
     try:
-        from .alphavantage_system import AlphaVantageBackend
-        return AlphaVantageBackend()
+        from .config import config
     except ImportError:
         try:
-            from src.alphavantage_system import AlphaVantageBackend
-            return AlphaVantageBackend()
+            from src.config import config  # type: ignore
         except ImportError:
             return None
+
+    api_key = getattr(config, "ALPHAVANTAGE_API_KEY", None)
+    if not api_key:
+        return None
+
+    try:
+        from .alphavantage_system import DataBackend
+    except ImportError:
+        try:
+            from src.alphavantage_system import DataBackend  # type: ignore
+        except ImportError:
+            return None
+
+    try:
+        return DataBackend(api_key)
+    except Exception as e:
+        _LOG.warning("Failed to initialize DataBackend for benchmark returns: %s", e)
+        return None
 
 try:
     import torch
@@ -137,7 +164,7 @@ def _fetch_benchmark_returns(
     ----------
     dates : pd.DatetimeIndex
         Dates to align benchmark returns to
-    cache_backend : AlphaVantageBackend, optional
+    cache_backend : DataBackend-compatible, optional
         Pre-initialized backend instance (for efficiency in batch calls)
         
     Returns
@@ -461,8 +488,10 @@ def statistical_factors(
     skip_orthogonalization : bool, default False
         Skip orthogonalization for non-orthogonal methods (ICA, NMF).
         Not recommended - leads to correlated factors.
-    cache_backend : AlphaVantageBackend, optional
-        Pre-initialized backend for fetching benchmark data efficiently
+    cache_backend : DataBackend-compatible, optional
+        Pre-initialized backend for fetching benchmark data efficiently.
+        This can be a `DataBackend` or any object implementing `get_prices(...)`,
+        including `FactorResearchSystem`.
         
     Returns
     -------
@@ -629,7 +658,7 @@ def autoencoder_factors(
         "cuda" or "cpu" (auto-detected if None)
     skip_residualization : bool, default False
         Skip market/sector residualization (not recommended)
-    cache_backend : AlphaVantageBackend, optional
+    cache_backend : DataBackend-compatible, optional
         Pre-initialized backend for benchmark fetching
         
     Returns

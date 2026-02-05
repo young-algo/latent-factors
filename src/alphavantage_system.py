@@ -275,10 +275,11 @@ class DataBackend:
         -------
         pd.DataFrame
             DataFrame with:
-            - Index: Business day dates (pandas DatetimeIndex)
+            - Index: Observed trading dates (pandas DatetimeIndex)
             - Columns: Ticker symbols
             - Values: Adjusted close prices (float)
-            - Frequency: Business days (B) with forward/backward fill
+            - Missing data: Leading/trailing NaNs are preserved to avoid
+              synthetic pre-listing or post-delisting prices
             
         Call Flow
         --------
@@ -287,7 +288,7 @@ class DataBackend:
         2. If stale: Download via _download_px_av() → _download_px_yf() (fallback)
         3. Load cached data via _load_px()
         4. Concatenate all series into DataFrame
-        5. Apply business day resampling with gap filling
+        5. Forward-fill only internal gaps (no backfill, no synthetic holidays)
         
         Performance
         ----------
@@ -354,7 +355,21 @@ class DataBackend:
         df.index = pd.to_datetime(df.index)
         if end:
             df = df.loc[:end]
-        result = df.asfreq("B").ffill().bfill()
+
+        # Preserve observed market calendar only. Do not expand to asfreq("B"),
+        # which would insert market holidays and synthetic zero-return periods.
+        #
+        # Also avoid backfilling leading NaNs and forward-filling trailing NaNs,
+        # both of which create non-tradable history (pre-listing/post-delisting).
+        # We only fill internal gaps between first and last valid observations.
+        result = df.copy()
+        for col in result.columns:
+            series = result[col]
+            first = series.first_valid_index()
+            last = series.last_valid_index()
+            if first is None or last is None:
+                continue
+            result.loc[first:last, col] = series.loc[first:last].ffill()
         
         _LOGGER.info("Price data loaded: %d days x %d tickers", len(result), len(result.columns))
         return result

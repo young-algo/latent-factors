@@ -100,7 +100,11 @@ from sklearn.decomposition import (
     PCA, SparsePCA, FactorAnalysis, FastICA
 )
 from sklearn.preprocessing import StandardScaler
-import openai                           # pip install openai>=1.2
+
+try:
+    import openai  # pip install openai>=1.2
+except ImportError:  # pragma: no cover - optional dependency
+    openai = None
 
 from .alphavantage_system import DataBackend
 from .config import config
@@ -713,6 +717,10 @@ class FactorResearchSystem(DataBackend):
                 return json.load(fh)
         if self._expos is None:
             raise RuntimeError("run fit_factors() first")
+        if openai is None:
+            raise ImportError(
+                "openai package is not installed. Install with: uv add openai"
+            )
 
         prompts = []
         for f in self._expos.columns:
@@ -1463,7 +1471,8 @@ class FactorResearchSystem(DataBackend):
             returns=rets,
             n_components=self.k,
             method=stat_method,
-            whiten=True
+            whiten=True,
+            cache_backend=self
         )
         
         return fac_rets, loadings

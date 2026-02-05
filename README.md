@@ -217,6 +217,52 @@ pytest tests/test_pit_universe.py::TestPITUniverseQA -v
 python tests/test_pit_universe.py
 ```
 
+### Nightly Factor QA (Residualization + Stability)
+
+Run the factor leakage/stability QA locally:
+
+```bash
+python scripts/factor_qa.py \
+  --factor-returns factor_returns.csv \
+  --output-prefix factor_qa
+```
+
+This emits:
+- `factor_qa_residualization.csv` (corr/beta/R² checks vs SPY + sectors)
+- `factor_qa_factor_corr.csv` (factor correlation matrix)
+- `factor_qa_report.json` (summary + stability snapshot)
+
+GitHub Actions nightly job:
+- Workflow: `.github/workflows/nightly-factor-qa.yml`
+- Schedule: weekdays at 10:30 UTC
+- Required secret: `ALPHAVANTAGE_API_KEY`
+- Add secret in GitHub: **Repo Settings → Secrets and variables → Actions → New repository secret**
+
+### Dashboard PM Vitals Inputs
+
+The dashboard now expects explicit return histories:
+- `portfolio_returns.csv` (column: `portfolio`)
+- `benchmark_returns.csv` (column: `benchmark`)
+
+Preferred: build them from local signal backtest + broad cache benchmark proxy:
+
+```bash
+python scripts/prepare_dashboard_returns.py \
+  --factor-returns factor_returns.csv \
+  --factor-loadings factor_loadings.csv \
+  --db-path av_cache.db
+```
+
+Fallback (quick placeholder bootstrap) from factor returns:
+
+```bash
+python scripts/bootstrap_dashboard_returns.py \
+  --factor-returns factor_returns.csv
+```
+
+This creates synthetic inputs for dashboard wiring only. Replace them with
+true strategy and benchmark return series for production metrics.
+
 ### Usage in Backtesting
 
 ```python

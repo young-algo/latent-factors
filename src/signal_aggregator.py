@@ -361,12 +361,12 @@ class SignalAggregator:
 
         # Collect cross-sectional signals
         if self.cross_sectional_analyzer is not None:
-            cs_signals = self._collect_cross_sectional_signals()
+            cs_signals = self._collect_cross_sectional_signals(date)
             all_signals.extend(cs_signals)
 
         # Collect regime signals
         if self.regime_detector is not None:
-            regime_signals = self._collect_regime_signals()
+            regime_signals = self._collect_regime_signals(date)
             all_signals.extend(regime_signals)
 
         # Store in history
@@ -404,7 +404,7 @@ class SignalAggregator:
                 direction=direction,
                 strength=confidence / 100,
                 confidence=confidence,
-                timestamp=pd.Timestamp.now(),
+                timestamp=pd.Timestamp(date) if date is not None else pd.Timestamp.now(),
                 metadata={
                     'factor': factor,
                     'rsi': data.get('rsi'),
@@ -416,7 +416,7 @@ class SignalAggregator:
             ))
 
         # Also collect extreme value alerts
-        extreme_alerts = self.momentum_analyzer.get_all_extreme_alerts()
+        extreme_alerts = self.momentum_analyzer.get_all_extreme_alerts(date=date)
         for alert in extreme_alerts:
             direction = (
                 SignalDirection.SELL if alert.direction == 'extreme_high'
@@ -443,13 +443,17 @@ class SignalAggregator:
 
         return signals
 
-    def _collect_cross_sectional_signals(self) -> List[Signal]:
+    def _collect_cross_sectional_signals(
+        self,
+        date: Optional[pd.Timestamp]
+    ) -> List[Signal]:
         """Collect cross-sectional signals from analyzer."""
         signals = []
 
         stock_signals = self.cross_sectional_analyzer.generate_long_short_signals(
             top_pct=0.1,
-            bottom_pct=0.1
+            bottom_pct=0.1,
+            as_of=date
         )
 
         for sig in stock_signals:
@@ -466,7 +470,7 @@ class SignalAggregator:
                 direction=direction,
                 strength=sig.confidence,
                 confidence=sig.confidence * 100,
-                timestamp=pd.Timestamp.now(),
+                timestamp=pd.Timestamp(date) if date is not None else pd.Timestamp.now(),
                 metadata={
                     'ticker': sig.ticker,
                     'composite_score': sig.composite_score,
@@ -478,11 +482,14 @@ class SignalAggregator:
 
         return signals
 
-    def _collect_regime_signals(self) -> List[Signal]:
+    def _collect_regime_signals(
+        self,
+        date: Optional[pd.Timestamp]
+    ) -> List[Signal]:
         """Collect regime-based signals from detector."""
         signals = []
 
-        regime_allocation = self.regime_detector.generate_regime_signals()
+        regime_allocation = self.regime_detector.generate_regime_signals(as_of=date)
 
         # Map regime to directional bias
         if regime_allocation.risk_on_score > 0.7:
@@ -504,7 +511,7 @@ class SignalAggregator:
             direction=direction,
             strength=regime_allocation.risk_on_score,
             confidence=min(95, confidence),
-            timestamp=pd.Timestamp.now(),
+            timestamp=pd.Timestamp(date) if date is not None else pd.Timestamp.now(),
             metadata={
                 'regime': regime_allocation.regime.value,
                 'risk_on_score': regime_allocation.risk_on_score,

@@ -174,7 +174,15 @@ def backtest_strategy(df: pd.DataFrame) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    AV_API_KEY = "2J6C7VY2IH3N90L7"  # ← replace with your Alpha Vantage key
+    from src.config import config
+
+    AV_API_KEY = config.ALPHAVANTAGE_API_KEY
+    if not AV_API_KEY:
+        raise SystemExit(
+            "ALPHAVANTAGE_API_KEY is not set. Add it to your .env file (project root) "
+            "or export it in your shell environment."
+        )
+
     data    = get_historical_data(AV_API_KEY)
     signals = calculate_rebalancing_signals(data)
     strat   = generate_actionable_signal(signals)

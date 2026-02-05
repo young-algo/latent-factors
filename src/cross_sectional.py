@@ -391,7 +391,8 @@ class CrossSectionalAnalyzer:
         top_pct: float = 0.1,
         bottom_pct: float = 0.1,
         scores: Optional[pd.Series] = None,
-        min_confidence: float = 0.0
+        min_confidence: float = 0.0,
+        as_of: Optional[pd.Timestamp] = None
     ) -> List[StockSignal]:
         """
         Generate long/short trading signals based on factor rankings.
@@ -406,6 +407,10 @@ class CrossSectionalAnalyzer:
             Composite scores. If None, calculates equal-weighted scores.
         min_confidence : float, default 0.0
             Minimum confidence threshold for signals
+        as_of : pd.Timestamp, optional
+            Included for as-of API consistency in walk-forward backtests.
+            Cross-sectional signals are currently static over the provided
+            loadings matrix, so this parameter is not yet used.
 
         Returns
         -------

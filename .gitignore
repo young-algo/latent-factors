@@ -11,6 +11,8 @@ wheels/
 
 # Environment variables
 .env
+.env.secrets
+.env copy
 
 # Data and cache files
 av_cache.db

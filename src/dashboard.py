@@ -205,8 +205,35 @@ def load_system_data():
         'loadings': None,
         'names': {},
         'fundamentals': None,
-        'spy_returns': None
+        'portfolio_returns': None,
+        'benchmark_returns': None
     }
+
+    def _load_series_from_csv(path: Path, preferred_names: List[str]) -> Optional[pd.Series]:
+        """Load a return series from CSV, preferring explicit column names."""
+        try:
+            frame = pd.read_csv(path, index_col=0, parse_dates=True)
+            if frame.empty:
+                return None
+
+            if frame.shape[1] == 1:
+                series = frame.iloc[:, 0]
+            else:
+                normalized = {c.lower(): c for c in frame.columns}
+                selected_col = None
+                for name in preferred_names:
+                    if name.lower() in normalized:
+                        selected_col = normalized[name.lower()]
+                        break
+                if selected_col is None:
+                    selected_col = frame.columns[0]
+                series = frame[selected_col]
+
+            series = series.sort_index()
+            series.index = pd.to_datetime(series.index)
+            return pd.to_numeric(series, errors='coerce').dropna()
+        except Exception:
+            return None
     
     # Load factor returns
     if Path("factor_returns.csv").exists():
@@ -235,6 +262,28 @@ def load_system_data():
                 data['names'] = json.load(f)
         except Exception:
             pass
+
+    # Explicit portfolio return history (required for true PM vitals)
+    portfolio_files = ["portfolio_returns.csv", "strategy_returns.csv"]
+    for f in portfolio_files:
+        path = Path(f)
+        if not path.exists():
+            continue
+        series = _load_series_from_csv(path, preferred_names=["portfolio", "strategy", "return"])
+        if series is not None and not series.empty:
+            data["portfolio_returns"] = series
+            break
+
+    # Explicit benchmark return history
+    benchmark_files = ["benchmark_returns.csv", "spy_returns.csv"]
+    for f in benchmark_files:
+        path = Path(f)
+        if not path.exists():
+            continue
+        series = _load_series_from_csv(path, preferred_names=["benchmark", "spy", "return"])
+        if series is not None and not series.empty:
+            data["benchmark_returns"] = series
+            break
     
     # Load basket data for liquidity analysis
     basket_files = [
@@ -366,54 +415,75 @@ def calculate_portfolio_vitals(
     returns: pd.DataFrame,
     loadings: pd.DataFrame,
     analyzers: dict,
-    lookback: int = 63
+    lookback: int = 63,
+    portfolio_returns: Optional[pd.Series] = None,
+    benchmark_returns: Optional[pd.Series] = None
 ) -> Dict[str, any]:
-    """Calculate key portfolio vitals for the header."""
+    """Calculate portfolio vitals from explicit portfolio and benchmark history."""
     vitals = {
-        'est_beta': 0.0,
-        'tracking_error': 0.0,
-        'unexplained_pnl': 0.0,
-        'info_ratio': 0.0,
+        'est_beta': np.nan,
+        'tracking_error': np.nan,
+        'unexplained_pnl': np.nan,
+        'info_ratio': np.nan,
         'gross_leverage': 1.0,
-        'net_exposure': 1.0,
-        'active_risk': 0.0
+        'net_exposure': 0.0,
+        'active_risk': np.nan
     }
-    
-    if returns is None or returns.empty:
+
+    if portfolio_returns is None or portfolio_returns.empty:
         return vitals
-    
-    recent = returns.tail(lookback)
-    
-    # Estimate portfolio beta (average factor correlation to SPY proxy)
-    # Use first factor as market proxy if no SPY data
-    if len(recent.columns) > 0:
-        # Calculate average factor volatility
-        factor_vols = recent.std() * np.sqrt(252)
-        vitals['active_risk'] = factor_vols.mean()
-        
-        # Estimate beta using factor correlations
-        if len(recent.columns) >= 2:
-            market_proxy = recent.iloc[:, 0]  # First factor as market proxy
-            portfolio_return = recent.mean(axis=1)  # Equal-weighted factor return
-            
-            # Simple beta calculation
-            covariance = portfolio_return.cov(market_proxy)
-            market_var = market_proxy.var()
+
+    portfolio_returns = pd.to_numeric(portfolio_returns, errors='coerce').dropna()
+    if portfolio_returns.empty:
+        return vitals
+
+    portfolio_returns = portfolio_returns.tail(lookback)
+
+    if benchmark_returns is not None:
+        benchmark_returns = pd.to_numeric(benchmark_returns, errors='coerce').dropna()
+        merged = pd.concat(
+            [portfolio_returns.rename('portfolio'), benchmark_returns.rename('benchmark')],
+            axis=1,
+            join='inner'
+        ).dropna()
+        merged = merged.tail(lookback)
+
+        if not merged.empty:
+            active = merged['portfolio'] - merged['benchmark']
+            tracking_error = active.std(ddof=0) * np.sqrt(252)
+            vitals['tracking_error'] = float(tracking_error)
+            vitals['active_risk'] = float(tracking_error)
+
+            denom = active.std(ddof=0)
+            if denom > 0:
+                vitals['info_ratio'] = float((active.mean() / denom) * np.sqrt(252))
+
+            market_var = merged['benchmark'].var(ddof=0)
             if market_var > 0:
-                vitals['est_beta'] = covariance / market_var
-        
-        # Information ratio (proxy using factor returns)
-        port_mean = recent.mean(axis=1).mean() * 252
-        port_vol = recent.mean(axis=1).std() * np.sqrt(252)
-        if port_vol > 0:
-            vitals['info_ratio'] = port_mean / port_vol
-        
-        # Unexplained PnL (residual after factor attribution)
-        # Simplified: ratio of idiosyncratic vol to total vol
-        total_var = (recent.std(axis=1) ** 2).mean()
-        systematic_var = (recent.mean(axis=1).var())
-        if total_var > 0:
-            vitals['unexplained_pnl'] = 1 - (systematic_var / total_var)
+                beta = merged['portfolio'].cov(merged['benchmark']) / market_var
+                vitals['est_beta'] = float(beta)
+    else:
+        # Without benchmark data we can still show absolute portfolio volatility.
+        portfolio_vol = portfolio_returns.std(ddof=0) * np.sqrt(252)
+        vitals['active_risk'] = float(portfolio_vol)
+
+    # Residual risk proxy via factor attribution: portfolio return ~ factor returns.
+    if returns is not None and not returns.empty and len(returns.columns) > 0:
+        factor_frame = returns.loc[portfolio_returns.index].copy().replace([np.inf, -np.inf], np.nan)
+        factor_frame = factor_frame.dropna(axis=1, how='all')
+        if not factor_frame.empty:
+            merged = pd.concat([portfolio_returns.rename('portfolio'), factor_frame], axis=1).dropna()
+            if len(merged) >= 10 and merged['portfolio'].var(ddof=0) > 0:
+                y = merged['portfolio'].values
+                X = merged.drop(columns=['portfolio']).values
+                if X.ndim == 1:
+                    X = X.reshape(-1, 1)
+                # Add intercept and estimate residual variance ratio.
+                X = np.column_stack([np.ones(len(X)), X])
+                coef, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+                residuals = y - X @ coef
+                unexplained = residuals.var(ddof=0) / y.var(ddof=0)
+                vitals['unexplained_pnl'] = float(np.clip(unexplained, 0.0, 1.0))
     
     return vitals
 
@@ -427,7 +497,13 @@ def render_morning_coffee_header(data: dict, analyzers: dict):
     regime_detector = analyzers.get('regime')
     
     # Calculate vitals
-    vitals = calculate_portfolio_vitals(returns, loadings, analyzers)
+    vitals = calculate_portfolio_vitals(
+        returns,
+        loadings,
+        analyzers,
+        portfolio_returns=data.get('portfolio_returns'),
+        benchmark_returns=data.get('benchmark_returns')
+    )
     
     # Create header columns
     col1, col2, col3, col4, col5 = st.columns([1.2, 1, 1, 1, 1])
@@ -442,26 +518,42 @@ def render_morning_coffee_header(data: dict, analyzers: dict):
     with col2:
         st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> ACTIVE RISK</h3>", 
                    unsafe_allow_html=True)
+        risk_available = pd.notna(vitals['active_risk'])
+        risk_value = f"{vitals['active_risk']:.2%}" if risk_available else "N/A"
+        risk_delta = "Target: 4-6%" if pd.notna(vitals['tracking_error']) else "Need Portfolio/Benchmark"
         st.metric(
             label="Tracking Error",
-            value=f"{vitals['active_risk']:.2%}",
-            delta=f"Target: 4-6%",
+            value=risk_value,
+            delta=risk_delta,
             delta_color="off"
         )
-        st.caption("vs Benchmark (VTHR)")
+        st.caption("Based on explicit portfolio + benchmark history")
         
         # Risk status indicator
-        risk_status = "🟢" if 0.04 <= vitals['active_risk'] <= 0.06 else "🟡" if vitals['active_risk'] < 0.08 else ""
-        st.markdown(f"**Status:** {risk_status} {'In Range' if 0.04 <= vitals['active_risk'] <= 0.06 else 'Review Required'}")
+        if risk_available:
+            risk_status = "🟢" if 0.04 <= vitals['active_risk'] <= 0.06 else "🟡" if vitals['active_risk'] < 0.08 else ""
+            risk_text = "In Range" if 0.04 <= vitals['active_risk'] <= 0.06 else "Review Required"
+        else:
+            risk_status = ""
+            risk_text = "Need Data"
+        st.markdown(f"**Status:** {risk_status} {risk_text}")
     
     with col3:
         st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> ESTIMATED BETA</h3>", 
                    unsafe_allow_html=True)
-        beta_color = "normal" if abs(vitals['est_beta']) < 0.1 else "inverse"
+        beta_available = pd.notna(vitals['est_beta'])
+        beta_color = "normal" if beta_available and abs(vitals['est_beta']) < 0.1 else "inverse"
+        beta_value = f"{vitals['est_beta']:.3f}" if beta_available else "N/A"
+        beta_delta = (
+            "Market Neutral"
+            if beta_available and abs(vitals['est_beta']) < 0.1
+            else "Need Benchmark" if not beta_available
+            else "Review Hedge"
+        )
         st.metric(
             label="Market Beta",
-            value=f"{vitals['est_beta']:.3f}",
-            delta=f"{'Market Neutral ' if abs(vitals['est_beta']) < 0.1 else 'Review Hedge'}",
+            value=beta_value,
+            delta=beta_delta,
             delta_color=beta_color
         )
         st.caption("Target: ±0.1 for Market Neutral")
@@ -469,11 +561,19 @@ def render_morning_coffee_header(data: dict, analyzers: dict):
     with col4:
         st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> UNEXPLAINED PnL</h3>", 
                    unsafe_allow_html=True)
-        ghost_color = "normal" if vitals['unexplained_pnl'] < 0.3 else "inverse"
+        unexplained_available = pd.notna(vitals['unexplained_pnl'])
+        ghost_color = "normal" if unexplained_available and vitals['unexplained_pnl'] < 0.3 else "inverse"
+        unexplained_value = f"{vitals['unexplained_pnl']:.1%}" if unexplained_available else "N/A"
+        unexplained_delta = (
+            "Need Portfolio + Factor Returns"
+            if not unexplained_available
+            else "Clean Attribution" if vitals['unexplained_pnl'] < 0.3
+            else "Check Factors"
+        )
         st.metric(
             label="Ghost Alpha/Risk",
-            value=f"{vitals['unexplained_pnl']:.1%}",
-            delta=f"{'Clean Attribution' if vitals['unexplained_pnl'] < 0.3 else 'Check Factors'}",
+            value=unexplained_value,
+            delta=unexplained_delta,
             delta_color=ghost_color
         )
         st.caption("Not explained by factors")
@@ -481,11 +581,20 @@ def render_morning_coffee_header(data: dict, analyzers: dict):
     with col5:
         st.markdown("<h3 style='color:#00d4ff; font-size:14px; margin-bottom:5px;'> INFO RATIO</h3>", 
                    unsafe_allow_html=True)
+        ir_available = pd.notna(vitals['info_ratio'])
+        ir_value = f"{vitals['info_ratio']:.2f}" if ir_available else "N/A"
+        ir_delta = (
+            "Need Benchmark"
+            if not ir_available
+            else "Strong" if vitals['info_ratio'] > 0.5
+            else "Developing" if vitals['info_ratio'] > 0
+            else "Review"
+        )
         st.metric(
             label="Information Ratio",
-            value=f"{vitals['info_ratio']:.2f}",
-            delta=f"{'Strong' if vitals['info_ratio'] > 0.5 else 'Developing' if vitals['info_ratio'] > 0 else 'Review'}",
-            delta_color="normal" if vitals['info_ratio'] > 0.5 else "off"
+            value=ir_value,
+            delta=ir_delta,
+            delta_color="normal" if ir_available and vitals['info_ratio'] > 0.5 else "off"
         )
         st.caption("Risk-adjusted alpha")
     
@@ -2764,6 +2873,51 @@ def render_risk_drawdown(data: dict, analyzers: dict):
 # SIDEBAR: GLOBAL CONTROLS
 # =============================================================================
 
+def _validate_pm_vitals_inputs(data: dict, min_rows: int = 63) -> Dict[str, any]:
+    """Validate explicit portfolio/benchmark return inputs for PM vitals."""
+    portfolio = data.get("portfolio_returns")
+    benchmark = data.get("benchmark_returns")
+
+    result: Dict[str, any] = {
+        "portfolio_ok": False,
+        "benchmark_ok": False,
+        "overlap_ok": False,
+        "overall_ok": False,
+        "messages": [],
+    }
+
+    if isinstance(portfolio, pd.Series) and not portfolio.empty:
+        result["portfolio_ok"] = True
+    else:
+        result["messages"].append("Missing portfolio_returns.csv")
+
+    if isinstance(benchmark, pd.Series) and not benchmark.empty:
+        result["benchmark_ok"] = True
+    else:
+        result["messages"].append("Missing benchmark_returns.csv")
+
+    if result["portfolio_ok"] and result["benchmark_ok"]:
+        overlap = pd.concat(
+            [portfolio.rename("portfolio"), benchmark.rename("benchmark")],
+            axis=1,
+            join="inner",
+        ).dropna()
+        result["overlap_rows"] = len(overlap)
+        result["overlap_ok"] = len(overlap) >= min_rows
+        result["overall_ok"] = result["overlap_ok"]
+        if not result["overlap_ok"]:
+            result["messages"].append(
+                f"Portfolio/benchmark overlap too short ({len(overlap)} rows)"
+            )
+        else:
+            result["overlap_start"] = overlap.index.min()
+            result["overlap_end"] = overlap.index.max()
+    else:
+        result["overlap_rows"] = 0
+
+    return result
+
+
 def render_sidebar(data: dict, analyzers: dict):
     """Render the sidebar with global controls."""
     st.sidebar.markdown("""
@@ -2800,6 +2954,21 @@ def render_sidebar(data: dict, analyzers: dict):
         st.sidebar.success(f" Factor Loadings: {len(loadings)} stocks")
     else:
         st.sidebar.error(" Factor Loadings: Not found")
+
+    # Startup check: explicit PM vitals inputs
+    st.sidebar.markdown("###  PM Vitals Inputs")
+    pm_inputs = _validate_pm_vitals_inputs(data)
+    if pm_inputs["overall_ok"]:
+        st.sidebar.success(
+            f" Portfolio/Benchmark: Ready ({pm_inputs['overlap_rows']} rows)"
+        )
+        st.sidebar.caption(
+            f" Overlap: {pm_inputs['overlap_start'].date()} to {pm_inputs['overlap_end'].date()}"
+        )
+    else:
+        st.sidebar.warning(" Portfolio/Benchmark: Incomplete")
+        for msg in pm_inputs["messages"]:
+            st.sidebar.caption(f"• {msg}")
     
     st.sidebar.markdown("---")
     
@@ -2870,9 +3039,20 @@ def main():
         Or ensure `factor_returns.csv` exists in the working directory.
         """)
         return
-    
-    # Render main sections
-    render_morning_coffee_header(data, analyzers)
+
+    # Render main header. Block PM vitals if explicit inputs are not valid.
+    pm_inputs = _validate_pm_vitals_inputs(data)
+    if pm_inputs["overall_ok"]:
+        render_morning_coffee_header(data, analyzers)
+    else:
+        st.markdown("<h1> ALPHACMD | FACTOR OPERATIONS TERMINAL</h1>", unsafe_allow_html=True)
+        reason = "; ".join(pm_inputs["messages"]) if pm_inputs["messages"] else "missing required return inputs"
+        st.warning(
+            "PM vitals are disabled: "
+            f"{reason}. Provide `portfolio_returns.csv` and `benchmark_returns.csv` "
+            "with overlapping history (>= 63 rows)."
+        )
+        st.markdown("---")
     
     # Main tabs (including Phase 2 enhancements)
     tab_discover, tab_construct, tab_phase2_regime, tab_phase2_meta, tab_risk = st.tabs([
