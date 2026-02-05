@@ -257,11 +257,15 @@ class DecisionSynthesizer:
             detector.fit_hmm(n_regimes=4)
             regime_result = detector.detect_current_regime()
 
+            # regime_result is a RegimeState object from regime_detection.py
+            # Extract name from the MarketRegime enum
+            regime_name = regime_result.regime.value if hasattr(regime_result.regime, 'value') else str(regime_result.regime)
+
             regime_state = RegimeState(
-                name=regime_result.get('regime', 'Unknown'),
-                confidence=regime_result.get('confidence', 0.5),
-                days_in_regime=regime_result.get('days_in_regime', 1),
-                trend=self._calculate_regime_trend(detector)
+                name=regime_name,
+                confidence=regime_result.probability,
+                days_in_regime=self._estimate_days_in_regime(detector),
+                trend=self._classify_trend(regime_result.trend)
             )
         except Exception as e:
             _LOGGER.warning(f"Regime detection failed: {e}")
@@ -352,6 +356,33 @@ class DecisionSynthesizer:
         """Determine if regime is strengthening or weakening."""
         # Simplified: would need historical probabilities
         return "stable"
+
+    def _estimate_days_in_regime(self, detector) -> int:
+        """Estimate how many days we've been in the current regime."""
+        try:
+            if hasattr(detector, 'regime_history') and detector.regime_history is not None:
+                history = detector.regime_history
+                if len(history) > 0:
+                    current = history[-1]
+                    days = 1
+                    for i in range(len(history) - 2, -1, -1):
+                        if history[i] == current:
+                            days += 1
+                        else:
+                            break
+                    return days
+        except Exception:
+            pass
+        return 1  # Default to 1 day
+
+    def _classify_trend(self, trend_value: float) -> str:
+        """Classify numeric trend value into description."""
+        if trend_value > 0.001:
+            return "strengthening"
+        elif trend_value < -0.001:
+            return "weakening"
+        else:
+            return "stable"
 
     def generate_recommendations(self, state: SignalState) -> List[Recommendation]:
         """
