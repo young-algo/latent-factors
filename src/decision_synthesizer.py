@@ -12,6 +12,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Dict, Any
+import logging
+
+import pandas as pd
+import numpy as np
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ConvictionLevel(Enum):
@@ -208,3 +214,141 @@ class ConvictionScorer:
             score += 3.0
 
         return int(min(score, 10))
+
+
+class DecisionSynthesizer:
+    """
+    Translates signals into actionable trading decisions.
+
+    Collects signals from regime detection, momentum analysis, and
+    cross-sectional ranking, then synthesizes into conviction-scored
+    recommendations and morning briefings.
+    """
+
+    def __init__(self):
+        self.scorer = ConvictionScorer()
+
+    def collect_all_signals(
+        self,
+        factor_returns: pd.DataFrame,
+        factor_loadings: pd.DataFrame,
+        factor_names: Optional[Dict[str, str]] = None
+    ) -> SignalState:
+        """
+        Gather current state from all signal sources.
+
+        Args:
+            factor_returns: DataFrame of factor returns (dates x factors)
+            factor_loadings: DataFrame of stock loadings (tickers x factors)
+            factor_names: Optional mapping of factor IDs to human names
+
+        Returns:
+            SignalState with all signal components populated
+        """
+        from src.regime_detection import RegimeDetector
+        from src.trading_signals import FactorMomentumAnalyzer
+        from src.cross_sectional import CrossSectionalAnalyzer
+
+        factor_names = factor_names or {}
+
+        # Detect regime
+        try:
+            detector = RegimeDetector(factor_returns)
+            detector.fit_hmm(n_regimes=4)
+            regime_result = detector.detect_current_regime()
+
+            regime_state = RegimeState(
+                name=regime_result.get('regime', 'Unknown'),
+                confidence=regime_result.get('confidence', 0.5),
+                days_in_regime=regime_result.get('days_in_regime', 1),
+                trend=self._calculate_regime_trend(detector)
+            )
+        except Exception as e:
+            _LOGGER.warning(f"Regime detection failed: {e}")
+            regime_state = RegimeState(
+                name="Unknown",
+                confidence=0.0,
+                days_in_regime=0,
+                trend="unknown"
+            )
+
+        # Calculate factor momentum
+        momentum_list = []
+        try:
+            analyzer = FactorMomentumAnalyzer(factor_returns)
+
+            for factor in factor_returns.columns:
+                return_7d = factor_returns[factor].tail(7).sum()
+                z_score = self._calculate_zscore(factor_returns[factor], window=20)
+
+                strength = self._classify_strength(z_score)
+
+                momentum_list.append(FactorMomentum(
+                    factor=factor,
+                    name=factor_names.get(factor, factor),
+                    return_7d=return_7d,
+                    strength=strength
+                ))
+        except Exception as e:
+            _LOGGER.warning(f"Momentum analysis failed: {e}")
+
+        # Detect extremes
+        extremes = []
+        try:
+            for factor in factor_returns.columns:
+                z = self._calculate_zscore(factor_returns[factor], window=20)
+                if abs(z) > 2.0:
+                    extremes.append(ExtremeReading(
+                        factor=factor,
+                        name=factor_names.get(factor, factor),
+                        z_score=z,
+                        direction="positive" if z > 0 else "negative"
+                    ))
+        except Exception as e:
+            _LOGGER.warning(f"Extreme detection failed: {e}")
+
+        # Calculate cross-sectional spread
+        try:
+            cs_analyzer = CrossSectionalAnalyzer(factor_loadings)
+            # Simplified: use first factor's spread
+            scores = factor_loadings.iloc[:, 0] if len(factor_loadings.columns) > 0 else pd.Series()
+            spread = (scores.quantile(0.9) - scores.quantile(0.1)) / scores.std() if len(scores) > 0 else 0
+        except Exception as e:
+            _LOGGER.warning(f"Cross-sectional analysis failed: {e}")
+            spread = 0.0
+
+        return SignalState(
+            date=datetime.now(),
+            regime=regime_state,
+            factor_momentum=momentum_list,
+            extremes_detected=extremes,
+            cross_sectional_spread=spread
+        )
+
+    def _calculate_zscore(self, series: pd.Series, window: int = 20) -> float:
+        """Calculate z-score of latest value vs rolling window."""
+        if len(series) < window:
+            return 0.0
+        recent = series.tail(window)
+        mean = recent.mean()
+        std = recent.std()
+        if std == 0:
+            return 0.0
+        return (series.iloc[-1] - mean) / std
+
+    def _classify_strength(self, z_score: float) -> str:
+        """Classify momentum strength from z-score."""
+        abs_z = abs(z_score)
+        if abs_z > 1.5:
+            return "strong"
+        elif abs_z > 0.75:
+            return "moderate"
+        elif abs_z > 0.25:
+            return "flat"
+        else:
+            return "weak"
+
+    def _calculate_regime_trend(self, detector) -> str:
+        """Determine if regime is strengthening or weakening."""
+        # Simplified: would need historical probabilities
+        return "stable"

@@ -8,7 +8,7 @@ from datetime import datetime
 from src.decision_synthesizer import (
     SignalState, RegimeState, FactorMomentum,
     Recommendation, TradeExpression, ConvictionLevel, ActionCategory,
-    ConvictionScorer
+    ConvictionScorer, DecisionSynthesizer
 )
 
 
@@ -157,3 +157,36 @@ class TestSignalAlignment:
         )
 
         assert alignment <= 4  # Regime conflict penalized heavily
+
+
+class TestSignalCollection:
+    """Tests for collecting signals from existing modules."""
+
+    def test_collect_signals_returns_signal_state(self):
+        """collect_all_signals should return complete SignalState."""
+        synthesizer = DecisionSynthesizer()
+
+        # Create mock factor returns
+        dates = pd.date_range('2025-01-01', periods=100, freq='D')
+        factor_returns = pd.DataFrame({
+            'F1': np.random.randn(100) * 0.02,
+            'F2': np.random.randn(100) * 0.02,
+        }, index=dates)
+
+        # Create mock factor loadings
+        tickers = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META']
+        factor_loadings = pd.DataFrame({
+            'F1': np.random.randn(5),
+            'F2': np.random.randn(5),
+        }, index=tickers)
+
+        state = synthesizer.collect_all_signals(
+            factor_returns=factor_returns,
+            factor_loadings=factor_loadings,
+            factor_names={'F1': 'Tech-Momentum', 'F2': 'Quality'}
+        )
+
+        assert isinstance(state, SignalState)
+        assert state.regime is not None
+        assert len(state.factor_momentum) == 2
+        assert state.date is not None
