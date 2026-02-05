@@ -190,3 +190,61 @@ class TestSignalCollection:
         assert state.regime is not None
         assert len(state.factor_momentum) == 2
         assert state.date is not None
+
+
+class TestRecommendationGeneration:
+    """Tests for generating recommendations from signals."""
+
+    def test_generates_opportunistic_on_regime_shift(self):
+        """Regime shift with high confidence should trigger OPPORTUNISTIC."""
+        synthesizer = DecisionSynthesizer()
+
+        state = SignalState(
+            date=datetime.now(),
+            regime=RegimeState(
+                name="Low-Vol Bull",
+                confidence=0.85,
+                days_in_regime=3,
+                trend="strengthening"
+            ),
+            factor_momentum=[
+                FactorMomentum("F1", "Tech-Momentum", 0.025, "strong"),
+                FactorMomentum("F2", "Quality", 0.010, "moderate"),
+            ],
+            extremes_detected=[],
+            cross_sectional_spread=1.5
+        )
+
+        recommendations = synthesizer.generate_recommendations(state)
+
+        # Should have at least one recommendation
+        assert len(recommendations) >= 1
+
+        # High confidence regime + strong momentum should produce OPPORTUNISTIC
+        opportunistic = [r for r in recommendations if r.category == ActionCategory.OPPORTUNISTIC]
+        assert len(opportunistic) >= 1
+
+    def test_generates_watch_on_low_conviction(self):
+        """Low conviction signals should produce WATCH items."""
+        synthesizer = DecisionSynthesizer()
+
+        state = SignalState(
+            date=datetime.now(),
+            regime=RegimeState(
+                name="Transition",
+                confidence=0.45,
+                days_in_regime=1,
+                trend="unknown"
+            ),
+            factor_momentum=[
+                FactorMomentum("F1", "Tech-Momentum", 0.003, "flat"),
+            ],
+            extremes_detected=[],
+            cross_sectional_spread=0.5
+        )
+
+        recommendations = synthesizer.generate_recommendations(state)
+
+        # Low conviction should result in WATCH, not action
+        for rec in recommendations:
+            assert rec.category == ActionCategory.WATCH or rec.conviction_score < 5.0

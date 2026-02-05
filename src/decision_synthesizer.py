@@ -352,3 +352,209 @@ class DecisionSynthesizer:
         """Determine if regime is strengthening or weakening."""
         # Simplified: would need historical probabilities
         return "stable"
+
+    def generate_recommendations(self, state: SignalState) -> List[Recommendation]:
+        """
+        Generate actionable recommendations from signal state.
+
+        Applies conviction scoring and categorizes by urgency.
+
+        Args:
+            state: Current SignalState snapshot
+
+        Returns:
+            List of Recommendations sorted by conviction
+        """
+        recommendations = []
+
+        # Check for regime-based opportunities
+        if state.regime.confidence > 0.70 and state.regime.days_in_regime >= 2:
+            rec = self._evaluate_regime_opportunity(state)
+            if rec:
+                recommendations.append(rec)
+
+        # Check for factor momentum opportunities
+        for fm in state.factor_momentum:
+            rec = self._evaluate_momentum_opportunity(fm, state)
+            if rec:
+                recommendations.append(rec)
+
+        # Check for extreme value opportunities
+        for extreme in state.extremes_detected:
+            rec = self._evaluate_extreme_opportunity(extreme, state)
+            if rec:
+                recommendations.append(rec)
+
+        # Sort by conviction score descending
+        recommendations.sort(key=lambda r: r.conviction_score, reverse=True)
+
+        return recommendations
+
+    def _evaluate_regime_opportunity(self, state: SignalState) -> Optional[Recommendation]:
+        """Evaluate regime-based trading opportunity."""
+        regime = state.regime
+
+        # Determine if regime favors risk-on or risk-off
+        bullish_regimes = ["Low-Vol Bull", "High-Vol Bull"]
+        bearish_regimes = ["Low-Vol Bear", "High-Vol Bear", "Crisis"]
+
+        is_bullish = regime.name in bullish_regimes
+
+        # Count confirming momentum signals
+        momentum_confirms = sum(
+            1 for fm in state.factor_momentum
+            if (fm.strength in ["strong", "moderate"] and fm.return_7d > 0) == is_bullish
+        )
+        total_factors = len(state.factor_momentum)
+
+        # Score conviction
+        score = self.scorer.calculate(
+            signal_strength=regime.confidence * 3,  # Scale confidence to z-score equivalent
+            signal_agreement=momentum_confirms,
+            total_signals=max(total_factors, 1),
+            regime_fit=True  # By definition, regime-based action fits regime
+        )
+
+        level = self.scorer.to_level(score)
+
+        # Determine category
+        if level == ConvictionLevel.HIGH:
+            category = ActionCategory.OPPORTUNISTIC
+        elif level == ConvictionLevel.MEDIUM:
+            category = ActionCategory.WEEKLY_REBALANCE
+        else:
+            category = ActionCategory.WATCH
+
+        action = f"{'Increase' if is_bullish else 'Reduce'} equity exposure"
+
+        return Recommendation(
+            action=action,
+            conviction=level,
+            conviction_score=score,
+            category=category,
+            reasons=[
+                f"Regime: {regime.name} ({regime.confidence:.0%} confidence, {regime.days_in_regime} days)",
+                f"Trend: {regime.trend}",
+                f"Momentum confirmation: {momentum_confirms}/{total_factors} factors aligned"
+            ],
+            conflicts=self._identify_conflicts(state, is_bullish),
+            expressions=[
+                TradeExpression("Simple", "SPY" if is_bullish else "SH", 0.05),
+            ],
+            exit_trigger=f"Regime shifts to {'bearish' if is_bullish else 'bullish'}",
+            sizing_rationale=f"{'Full' if level == ConvictionLevel.HIGH else 'Reduced'} size based on conviction"
+        )
+
+    def _evaluate_momentum_opportunity(
+        self,
+        fm: FactorMomentum,
+        state: SignalState
+    ) -> Optional[Recommendation]:
+        """Evaluate factor momentum opportunity."""
+        if fm.strength not in ["strong", "moderate"]:
+            return None
+
+        # Check regime fit
+        bullish_regimes = ["Low-Vol Bull", "High-Vol Bull"]
+        regime_bullish = state.regime.name in bullish_regimes
+        momentum_bullish = fm.return_7d > 0
+        regime_fit = regime_bullish == momentum_bullish
+
+        # If regime conflict, demote to WATCH
+        if not regime_fit and state.regime.confidence > 0.6:
+            return Recommendation(
+                action=f"Monitor {fm.name}",
+                conviction=ConvictionLevel.LOW,
+                conviction_score=3.0,
+                category=ActionCategory.WATCH,
+                reasons=[
+                    f"Signal: {fm.name} {'+' if momentum_bullish else '-'}{abs(fm.return_7d):.1%} (7d)",
+                    f"Regime conflict: {state.regime.name} suggests opposite direction"
+                ],
+                conflicts=[f"Regime ({state.regime.name}) conflicts with momentum signal"],
+                expressions=[],
+                exit_trigger=f"Regime aligns with {fm.name} momentum"
+            )
+
+        # Score conviction
+        strength_score = 1.5 if fm.strength == "strong" else 1.0
+        score = self.scorer.calculate(
+            signal_strength=strength_score,
+            signal_agreement=2 if regime_fit else 1,
+            total_signals=3,
+            regime_fit=regime_fit
+        )
+
+        level = self.scorer.to_level(score)
+        category = (
+            ActionCategory.OPPORTUNISTIC if level == ConvictionLevel.HIGH
+            else ActionCategory.WEEKLY_REBALANCE if level == ConvictionLevel.MEDIUM
+            else ActionCategory.WATCH
+        )
+
+        action = f"{'Increase' if momentum_bullish else 'Decrease'} {fm.name} exposure"
+
+        return Recommendation(
+            action=action,
+            conviction=level,
+            conviction_score=score,
+            category=category,
+            reasons=[
+                f"Signal: {fm.name} {'+' if momentum_bullish else ''}{fm.return_7d:.1%} over 7 days ({fm.strength})",
+                f"Regime: {state.regime.name} {'confirms' if regime_fit else 'conflicts'}"
+            ],
+            conflicts=[] if regime_fit else [f"Regime conflict: {state.regime.name}"],
+            expressions=[
+                TradeExpression("Factor tilt", f"Tilt toward {fm.name}", 0.03),
+            ],
+            exit_trigger=f"{fm.name} momentum reverses or regime shifts"
+        )
+
+    def _evaluate_extreme_opportunity(
+        self,
+        extreme: ExtremeReading,
+        state: SignalState
+    ) -> Optional[Recommendation]:
+        """Evaluate extreme value opportunity (mean reversion)."""
+        # Extreme values suggest mean reversion
+        is_reversal_long = extreme.direction == "negative"  # Oversold = buy
+
+        score = self.scorer.calculate(
+            signal_strength=abs(extreme.z_score),
+            signal_agreement=1,  # Extreme is single signal
+            total_signals=3,
+            regime_fit=True  # Extremes can work in any regime
+        )
+
+        level = self.scorer.to_level(score)
+
+        return Recommendation(
+            action=f"Mean reversion {'long' if is_reversal_long else 'short'} on {extreme.name}",
+            conviction=level,
+            conviction_score=score,
+            category=ActionCategory.OPPORTUNISTIC,  # Extremes are time-sensitive
+            reasons=[
+                f"Extreme: {extreme.name} z-score {extreme.z_score:.1f} ({extreme.direction})",
+                f"Statistical: Beyond 2-sigma suggests reversion"
+            ],
+            conflicts=[],
+            expressions=[
+                TradeExpression(
+                    "Reversion",
+                    f"{'Buy' if is_reversal_long else 'Sell'} {extreme.name}-exposed stocks",
+                    0.02
+                ),
+            ],
+            exit_trigger=f"Z-score returns to +/- 1.0"
+        )
+
+    def _identify_conflicts(self, state: SignalState, proposed_bullish: bool) -> List[str]:
+        """Identify signals that conflict with proposed direction."""
+        conflicts = []
+
+        for fm in state.factor_momentum:
+            momentum_bullish = fm.return_7d > 0
+            if fm.strength in ["strong", "moderate"] and momentum_bullish != proposed_bullish:
+                conflicts.append(f"{fm.name} momentum is {'bullish' if momentum_bullish else 'bearish'}")
+
+        return conflicts
