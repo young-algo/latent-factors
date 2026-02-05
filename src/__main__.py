@@ -440,6 +440,78 @@ def cmd_report(args):
 
 
 # =============================================================================
+# Briefing Commands
+# =============================================================================
+
+def cmd_briefing(args):
+    """Generate morning briefing with actionable recommendations."""
+    from src.decision_synthesizer import DecisionSynthesizer
+    from src.research import FactorResearchSystem
+    import pickle
+    from pathlib import Path
+
+    print("═" * 70)
+    print("📋 GENERATING MORNING BRIEFING")
+    print("═" * 70)
+
+    # Load or generate factors
+    cache_file = f"factor_cache_{'_'.join(args.universe)}_{args.method}.pkl"
+
+    if Path(cache_file).exists():
+        print(f"\n📂 Loading cached factors from {cache_file}")
+        with open(cache_file, 'rb') as f:
+            factor_returns, factor_loadings = pickle.load(f)
+        factor_names = {}
+    else:
+        print(f"\n🔍 Generating factors for {', '.join(args.universe)}...")
+        api_key = get_api_key()
+        frs = FactorResearchSystem(
+            api_key,
+            universe=args.universe,
+            factor_method=args.method,
+            n_components=args.components,
+            expand_etfs=True
+        )
+        frs.fit_factors()
+        factor_returns = frs.get_factor_returns()
+        factor_loadings = frs._expos
+        factor_names = {}
+
+        # Cache for next time
+        with open(cache_file, 'wb') as f:
+            pickle.dump((factor_returns, factor_loadings), f)
+
+    # Generate briefing
+    print("\n🔮 Analyzing signals...")
+    synthesizer = DecisionSynthesizer()
+
+    state = synthesizer.collect_all_signals(
+        factor_returns=factor_returns,
+        factor_loadings=factor_loadings,
+        factor_names=factor_names
+    )
+
+    recommendations = synthesizer.generate_recommendations(state)
+    briefing = synthesizer.render_briefing(state, recommendations)
+
+    # Output
+    print("\n")
+    print(briefing)
+
+    # Save if requested
+    if args.output:
+        output_path = args.output
+        if args.format == "markdown":
+            output_path = output_path if output_path.endswith('.md') else f"{output_path}.md"
+        else:
+            output_path = output_path if output_path.endswith('.txt') else f"{output_path}.txt"
+
+        with open(output_path, 'w') as f:
+            f.write(briefing)
+        print(f"\n💾 Briefing saved to: {output_path}")
+
+
+# =============================================================================
 # Maintenance Commands
 # =============================================================================
 
@@ -1111,11 +1183,48 @@ For more help on a specific command:
         help='Output filename'
     )
     report_parser.add_argument(
-        '--open', 
-        action='store_true', 
+        '--open',
+        action='store_true',
         help='Open in browser (HTML only)'
     )
-    
+
+    # -------------------------------------------------------------------------
+    # Briefing command
+    # -------------------------------------------------------------------------
+    briefing_parser = subparsers.add_parser(
+        'briefing',
+        help='Generate morning briefing with actionable recommendations',
+        description='Synthesize all signals into a morning briefing with trade recommendations'
+    )
+    briefing_parser.add_argument(
+        '--universe',
+        nargs='+',
+        default=['SPY'],
+        help='Stock/ETF universe (default: SPY)'
+    )
+    briefing_parser.add_argument(
+        '--method',
+        default='pca',
+        choices=['fundamental', 'pca', 'ica'],
+        help='Factor method (default: pca)'
+    )
+    briefing_parser.add_argument(
+        '--components',
+        type=int,
+        default=8,
+        help='Number of factors (default: 8)'
+    )
+    briefing_parser.add_argument(
+        '--output', '-o',
+        help='Save briefing to file'
+    )
+    briefing_parser.add_argument(
+        '--format',
+        choices=['text', 'markdown'],
+        default='text',
+        help='Output format (default: text)'
+    )
+
     # -------------------------------------------------------------------------
     # Clean command
     # -------------------------------------------------------------------------
@@ -1286,6 +1395,7 @@ def main():
         'discover': cmd_discover,
         'dashboard': cmd_dashboard,
         'report': cmd_report,
+        'briefing': cmd_briefing,
         'clean': cmd_clean,
         'regime': lambda args: cmd_regime_detect(args) if args.regime_command == 'detect' else None,
         'backtest': cmd_backtest,
