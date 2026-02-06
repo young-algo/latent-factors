@@ -55,8 +55,10 @@ from scipy.optimize import minimize, differential_evolution
 
 try:
     from .factor_weighting import OptimalFactorWeighter, WeightingMethod
+    from .covariance import CovarianceMethod
 except ImportError:
     from src.factor_weighting import OptimalFactorWeighter, WeightingMethod
+    from src.covariance import CovarianceMethod
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -188,11 +190,13 @@ class SharpeOptimizer:
         factor_returns: pd.DataFrame,
         factor_loadings: Optional[pd.DataFrame] = None,
         risk_free_rate: float = 0.0,
-        reset_index: bool = True
+        reset_index: bool = True,
+        cov_method: CovarianceMethod = CovarianceMethod.LEDOIT_WOLF,
+        cov_halflife: Optional[int] = None,
     ):
         """
         Initialize the SharpeOptimizer.
-        
+
         Parameters
         ----------
         factor_returns : pd.DataFrame
@@ -203,10 +207,14 @@ class SharpeOptimizer:
         risk_free_rate : float, default 0.0
             Risk-free rate for Sharpe calculation
         reset_index : bool, default True
-            If True, resets the index of factor_returns to handle 
+            If True, resets the index of factor_returns to handle
             non-contiguous indices (e.g., from regime filtering).
             This is important for RS-MVO (Regime-Switching Mean-Variance Optimization)
             where returns are filtered by regime state.
+        cov_method : CovarianceMethod
+            Covariance estimation method passed to the internal weighter.
+        cov_halflife : int, optional
+            Half-life for EWMA covariance (required when method is EWMA).
         """
         # Handle non-contiguous indices (e.g., from regime filtering)
         # We preserve the original index for reference but reset for calculations
@@ -228,7 +236,9 @@ class SharpeOptimizer:
         # Note: weighter also needs regime-filtered returns with reset index
         self._weighter = OptimalFactorWeighter(
             factor_loadings if factor_loadings is not None else pd.DataFrame(),
-            self.returns  # Use reset-index returns
+            self.returns,  # Use reset-index returns
+            cov_method=cov_method,
+            cov_halflife=cov_halflife,
         )
     
     def optimize_blend(

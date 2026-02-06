@@ -100,6 +100,13 @@ from .latent_factors import (
     validate_factor_distinctiveness,
 )
 
+# Covariance estimation
+from .covariance import (
+    CovarianceMethod,
+    estimate_covariance,
+    auto_select_method,
+)
+
 # Factor weighting
 from .factor_weighting import (
     OptimalFactorWeighter,
@@ -181,6 +188,11 @@ __all__ = [
     "StatMethod",
     "validate_factor_distinctiveness",
     
+    # Covariance Estimation
+    "CovarianceMethod",
+    "estimate_covariance",
+    "auto_select_method",
+
     # Factor Weighting
     "OptimalFactorWeighter",
     "FactorCharacteristics",

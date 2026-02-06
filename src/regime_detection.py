@@ -71,7 +71,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-from sklearn.covariance import LedoitWolf
+from .covariance import auto_select_method, CovarianceMethod
 
 # Optional hmmlearn import with fallback
 try:
@@ -664,38 +664,20 @@ class RegimeDetector:
             else:
                 return self._get_heuristic_factor_weights(regime)
 
-        # 3. Ensure covariance matrix is positive semi-definite using Ledoit-Wolf shrinkage
-        try:
-            # Check if covariance matrix is well-conditioned
-            cov_matrix = conditional_returns.cov()
-            eigenvalues = np.linalg.eigvalsh(cov_matrix)
-            
-            if np.any(eigenvalues <= 1e-10):
-                _LOGGER.info(f"Applying Ledoit-Wolf shrinkage for {regime.value} regime covariance")
-                lw = LedoitWolf()
-                shrunk_cov = lw.fit(conditional_returns).covariance_
-                # Replace returns with synthetic data that has the shrunk covariance
-                # This preserves mean returns but uses stabilized covariance
-                mean_returns = conditional_returns.mean()
-                conditional_returns = pd.DataFrame(
-                    np.random.multivariate_normal(
-                        mean_returns, 
-                        shrunk_cov, 
-                        size=len(conditional_returns)
-                    ),
-                    columns=factor_cols,
-                    index=conditional_returns.index
-                )
-        except Exception as e:
-            _LOGGER.warning(f"Covariance shrinkage failed: {e}. Proceeding with raw data.")
+        # 3. Select robust covariance method based on data dimensions
+        cov_method = auto_select_method(len(conditional_returns), len(factor_cols))
+        _LOGGER.info(
+            f"Using {cov_method.value} covariance for {regime.value} regime "
+            f"({len(conditional_returns)} obs, {len(factor_cols)} factors)"
+        )
 
         # 4. Conditional Optimization using SharpeOptimizer
-        # We use the existing SharpeOptimizer but pass it the DISCONTIGUOUS filtered dataset.
-        # Note: For MVO/RiskParity the order matters less than the covariance structure.
+        # Robust covariance is threaded through to the internal weighter.
         try:
             optimizer = SharpeOptimizer(
                 factor_returns=conditional_returns,
-                risk_free_rate=0.0
+                risk_free_rate=0.0,
+                cov_method=cov_method,
             )
             
             # 5. Optimize using multiple methods for robustness

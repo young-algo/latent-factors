@@ -61,6 +61,8 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from scipy.optimize import minimize
 
+from .covariance import CovarianceMethod, estimate_covariance
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -211,23 +213,31 @@ class OptimalFactorWeighter:
     def __init__(
         self,
         factor_loadings: pd.DataFrame,
-        factor_returns: Optional[pd.DataFrame] = None
+        factor_returns: Optional[pd.DataFrame] = None,
+        cov_method: CovarianceMethod = CovarianceMethod.LEDOIT_WOLF,
+        cov_halflife: Optional[int] = None,
     ):
         """
         Initialize the OptimalFactorWeighter.
-        
+
         Parameters
         ----------
         factor_loadings : pd.DataFrame
             Factor loadings matrix (N×K)
         factor_returns : pd.DataFrame, optional
             Factor returns matrix (T×K)
+        cov_method : CovarianceMethod
+            Covariance estimation method (default: Ledoit-Wolf shrinkage)
+        cov_halflife : int, optional
+            Half-life for EWMA covariance (required when method is EWMA)
         """
         self.loadings = factor_loadings.copy()
         self.returns = factor_returns.copy() if factor_returns is not None else None
         self.n_stocks = factor_loadings.shape[0]
         self.n_factors = factor_loadings.shape[1]
         self.factor_names = list(factor_loadings.columns)
+        self.cov_method = cov_method
+        self.cov_halflife = cov_halflife
         
     def equal_weights(self) -> Dict[str, float]:
         """
@@ -519,8 +529,11 @@ class OptimalFactorWeighter:
         
         # Calculate covariance matrix
         recent_returns = self.returns.tail(lookback)
-        cov = recent_returns[self.factor_names].cov().values
-        
+        cov = estimate_covariance(
+            recent_returns[self.factor_names],
+            method=self.cov_method, halflife=self.cov_halflife,
+        )
+
         # Initialize with inverse volatility weights
         inv_vols = 1.0 / np.sqrt(np.diag(cov))
         w = inv_vols / inv_vols.sum()
@@ -583,8 +596,11 @@ class OptimalFactorWeighter:
         
         # Calculate covariance matrix
         recent_returns = self.returns.tail(lookback)
-        cov = recent_returns[self.factor_names].cov().values
-        
+        cov = estimate_covariance(
+            recent_returns[self.factor_names],
+            method=self.cov_method, halflife=self.cov_halflife,
+        )
+
         # Objective function
         def objective(w):
             return w @ cov @ w
@@ -647,7 +663,10 @@ class OptimalFactorWeighter:
         
         # Calculate covariance and volatilities
         recent_returns = self.returns.tail(lookback)
-        cov = recent_returns[self.factor_names].cov().values
+        cov = estimate_covariance(
+            recent_returns[self.factor_names],
+            method=self.cov_method, halflife=self.cov_halflife,
+        )
         vols = np.sqrt(np.diag(cov))
         
         # Objective: maximize DR = (w'vols) / sqrt(w'Sw)

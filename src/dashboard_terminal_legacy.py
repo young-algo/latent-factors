@@ -47,6 +47,7 @@ try:
     from src.regime_detection import RegimeDetector, MarketRegime
     from src.factor_optimization import SharpeOptimizer, OptimizationResult
     from src.factor_weighting import OptimalFactorWeighter
+    from src.covariance import estimate_covariance, CovarianceMethod
     from src.trading_signals import FactorMomentumAnalyzer
     from src.cross_sectional import CrossSectionalAnalyzer
     from src.database import check_database_health, get_db_connection
@@ -1730,7 +1731,9 @@ def calculate_efficient_frontier(
         return np.array([]), np.array([]), np.array([])
     
     mean_rets = returns.mean() * 252
-    cov_matrix = returns.cov() * 252
+    cov_matrix = estimate_covariance(
+        returns, method=CovarianceMethod.LEDOIT_WOLF, annualize=True,
+    )
     n_assets = len(mean_rets)
     
     # Generate random portfolios
@@ -1882,7 +1885,10 @@ def render_portfolio_constructor(data: dict, analyzers: dict):
                 # Current portfolio point (equal weight)
                 curr_weights = np.ones(len(returns.columns)) / len(returns.columns)
                 curr_ret = (returns.mean() * 252 @ curr_weights) * 100
-                curr_vol = np.sqrt(curr_weights @ (returns.cov() * 252) @ curr_weights) * 100
+                cov_annual = estimate_covariance(
+                    returns, method=CovarianceMethod.LEDOIT_WOLF, annualize=True,
+                )
+                curr_vol = np.sqrt(curr_weights @ cov_annual @ curr_weights) * 100
                 
                 fig_frontier.add_trace(go.Scatter(
                     x=[curr_vol],
