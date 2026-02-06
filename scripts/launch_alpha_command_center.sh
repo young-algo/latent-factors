@@ -22,8 +22,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "=========================================="
-echo "  Alpha Command Center Launch Script"
-echo "  Factor Operations Terminal v2.0"
+echo "  Equity Factors Dashboard"
+echo "  (formerly: Alpha Command Center)"
 echo "=========================================="
 echo ""
 
@@ -48,20 +48,14 @@ if [ ! -f "factor_returns.csv" ]; then
     echo ""
 fi
 
-echo " Launching Alpha Command Center..."
+echo " Launching dashboard..."
 echo "   URL: http://localhost:$PORT"
 echo ""
 echo "Press Ctrl+C to stop"
 echo "=========================================="
 echo ""
 
-# Launch Streamlit with custom theme
-streamlit run src/dashboard_alpha_command_center.py \
+# Launch Streamlit (theme configured in .streamlit/config.toml)
+streamlit run src/dashboard.py \
     --server.port=$PORT \
-    --server.address=localhost \
-    --theme.base=dark \
-    --theme.primaryColor="#00d4ff" \
-    --theme.backgroundColor="#0a0a0a" \
-    --theme.secondaryBackgroundColor="#1a1a2e" \
-    --theme.textColor="#ffffff" \
-    --theme.font="monospace"
+    --server.address=localhost

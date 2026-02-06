@@ -224,7 +224,8 @@ def _parse() -> argparse.Namespace:
 
 def run_discovery(symbols: str, start_date: str = "2020-04-01", 
                   method: str = "PCA", k: int = 10, rolling: int = 0, 
-                  name_out: str = "factor_names.csv"):
+                  name_out: str = "factor_names.csv",
+                  use_llm_naming: bool = True):
     """
     Execute the complete factor discovery and naming workflow programmatically.
     
@@ -292,23 +293,45 @@ def run_discovery(symbols: str, start_date: str = "2020-04-01",
     else:
         logging.info(" Factor validation passed")
 
-    # ------------------- LLM naming -------------------- #
-    fundamental_fields = [
-        "Sector", "MarketCapitalization", "PERatio", "DividendYield",
-        "PriceToSalesRatioTTM", "PriceToBookRatio", "ForwardPE", "ProfitMargin", 
-        "ReturnOnEquityTTM", "QuarterlyEarningsGrowthYOY", "Beta", 
-        "OperatingMarginTTM", "PercentInstitutions"
-    ]
-    fundamentals = frs.get_fundamentals(loadings.index.tolist(), fields=fundamental_fields)
-    names = {}
-    for f in loadings.columns:
-        top = loadings[f].nlargest(10).index.tolist()
-        bot = loadings[f].nsmallest(10).index.tolist()
-        label = ask_llm(f, top, bot, fundamentals)
-        names[f] = label
-        logging.info("Factor %s →  %s", f, label)
+    # ------------------- Factor naming -------------------- #
+    names = {f: f for f in loadings.columns}  # default fallback: factor id
 
-    pd.Series(names).to_csv(name_out)
+    if use_llm_naming:
+        import os
+
+        if not os.getenv("OPENAI_API_KEY"):
+            logging.warning("OPENAI_API_KEY not set; skipping LLM naming.")
+            use_llm_naming = False
+
+    if use_llm_naming:
+        fundamental_fields = [
+            "Sector",
+            "MarketCapitalization",
+            "PERatio",
+            "DividendYield",
+            "PriceToSalesRatioTTM",
+            "PriceToBookRatio",
+            "ForwardPE",
+            "ProfitMargin",
+            "ReturnOnEquityTTM",
+            "QuarterlyEarningsGrowthYOY",
+            "Beta",
+            "OperatingMarginTTM",
+            "PercentInstitutions",
+        ]
+        fundamentals = frs.get_fundamentals(loadings.index.tolist(), fields=fundamental_fields)
+        names = {}
+        for f in loadings.columns:
+            top = loadings[f].nlargest(10).index.tolist()
+            bot = loadings[f].nsmallest(10).index.tolist()
+            label = ask_llm(f, top, bot, fundamentals)
+            short_name = getattr(label, "short_name", None)
+            names[f] = short_name if isinstance(short_name, str) and short_name else str(label)
+            logging.info("Factor %s →  %s", f, names[f])
+
+    pd.DataFrame(
+        [{"factor": k, "name": v} for k, v in names.items()]
+    ).to_csv(name_out, index=False)
     logging.info("Saved factor names → %s", name_out)
     
     # Save factor returns and loadings for analysis
