@@ -77,7 +77,14 @@ def cmd_discover(args):
             method=args.method,
             k=args.k,
             rolling=args.rolling,
-            name_out=args.name_out
+            name_out=args.name_out,
+            residualization_method=args.residualization_method,
+            residualization_window=args.residualization_window,
+            residualization_halflife=args.residualization_halflife,
+            residualization_min_observations=args.residualization_min_observations,
+            residualization_kalman_process_variance=args.residualization_kalman_process_variance,
+            residualization_kalman_observation_variance=args.residualization_kalman_observation_variance,
+            residualization_kalman_initial_covariance=args.residualization_kalman_initial_covariance,
         )
         print("\n Factor discovery complete!")
     except Exception as e:
@@ -1041,6 +1048,48 @@ For more help on a specific command:
         '--name_out', 
         default='factor_names.csv', 
         help='Output CSV file for factor names'
+    )
+    discover_parser.add_argument(
+        '--residualization-method',
+        choices=['rolling', 'ewm', 'kalman'],
+        default='rolling',
+        help='Time-varying beta method for benchmark residualization'
+    )
+    discover_parser.add_argument(
+        '--residualization-window',
+        type=int,
+        default=126,
+        help='Lookback window for rolling/EWM residualization'
+    )
+    discover_parser.add_argument(
+        '--residualization-halflife',
+        type=float,
+        default=63.0,
+        help='EWM half-life (used when --residualization-method=ewm)'
+    )
+    discover_parser.add_argument(
+        '--residualization-min-observations',
+        type=int,
+        default=30,
+        help='Minimum history required before residualizing a timestamp'
+    )
+    discover_parser.add_argument(
+        '--residualization-kalman-process-variance',
+        type=float,
+        default=1e-5,
+        help='Kalman process noise scale for time-varying betas'
+    )
+    discover_parser.add_argument(
+        '--residualization-kalman-observation-variance',
+        type=float,
+        default=None,
+        help='Kalman observation noise variance (default: auto-estimate)'
+    )
+    discover_parser.add_argument(
+        '--residualization-kalman-initial-covariance',
+        type=float,
+        default=10.0,
+        help='Kalman initial state covariance scale'
     )
     
     # -------------------------------------------------------------------------

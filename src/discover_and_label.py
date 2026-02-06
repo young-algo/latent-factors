@@ -219,12 +219,61 @@ def _parse() -> argparse.Namespace:
     p.add_argument("--rolling", type=int, default=0,
                    help="rolling window (days); 0 = static")
     p.add_argument("--name_out", default="factor_names.csv")
+    p.add_argument(
+        "--residualization-method",
+        choices=["rolling", "ewm", "kalman"],
+        default="rolling",
+        help="Time-varying beta method for benchmark residualization",
+    )
+    p.add_argument(
+        "--residualization-window",
+        type=int,
+        default=126,
+        help="Lookback window for rolling/EWM residualization",
+    )
+    p.add_argument(
+        "--residualization-halflife",
+        type=float,
+        default=63.0,
+        help="EWM half-life (used when --residualization-method=ewm)",
+    )
+    p.add_argument(
+        "--residualization-min-observations",
+        type=int,
+        default=30,
+        help="Minimum history required before residualizing a timestamp",
+    )
+    p.add_argument(
+        "--residualization-kalman-process-variance",
+        type=float,
+        default=1e-5,
+        help="Kalman process noise scale for time-varying betas",
+    )
+    p.add_argument(
+        "--residualization-kalman-observation-variance",
+        type=float,
+        default=None,
+        help="Kalman observation noise variance (default: auto-estimate)",
+    )
+    p.add_argument(
+        "--residualization-kalman-initial-covariance",
+        type=float,
+        default=10.0,
+        help="Kalman initial state covariance scale",
+    )
     return p.parse_args()
 
 
 def run_discovery(symbols: str, start_date: str = "2020-04-01", 
                   method: str = "PCA", k: int = 10, rolling: int = 0, 
                   name_out: str = "factor_names.csv",
+                  residualization_method: str = "rolling",
+                  residualization_window: int = 126,
+                  residualization_halflife: float = 63.0,
+                  residualization_min_observations: int = 30,
+                  residualization_kalman_process_variance: float = 1e-5,
+                  residualization_kalman_observation_variance: float | None = None,
+                  residualization_kalman_initial_covariance: float = 10.0,
                   use_llm_naming: bool = True):
     """
     Execute the complete factor discovery and naming workflow programmatically.
@@ -243,6 +292,20 @@ def run_discovery(symbols: str, start_date: str = "2020-04-01",
         Rolling window size in days (0 for static analysis)
     name_out : str, default "factor_names.csv"
         Output path for factor names CSV
+    residualization_method : str, default "rolling"
+        Time-varying beta method: "rolling", "ewm", or "kalman"
+    residualization_window : int, default 126
+        Lookback window for rolling/EWM residualization
+    residualization_halflife : float, default 63.0
+        EWM half-life when residualization_method="ewm"
+    residualization_min_observations : int, default 30
+        Minimum observations required before residualizing a timestamp
+    residualization_kalman_process_variance : float, default 1e-5
+        Kalman process noise scale
+    residualization_kalman_observation_variance : float | None, default None
+        Kalman observation noise variance (None => auto-estimate)
+    residualization_kalman_initial_covariance : float, default 10.0
+        Kalman initial state covariance scale
     """
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s  %(levelname)s  %(message)s")
@@ -265,6 +328,13 @@ def run_discovery(symbols: str, start_date: str = "2020-04-01",
     args.method = method
     args.k = k
     args.rolling = rolling
+    args.residualization_method = residualization_method
+    args.residualization_window = residualization_window
+    args.residualization_halflife = residualization_halflife
+    args.residualization_min_observations = residualization_min_observations
+    args.residualization_kalman_process_variance = residualization_kalman_process_variance
+    args.residualization_kalman_observation_variance = residualization_kalman_observation_variance
+    args.residualization_kalman_initial_covariance = residualization_kalman_initial_covariance
 
     if rolling > 0:
         # simple: fit new factors every R days, keep latest loadings for naming
@@ -347,6 +417,13 @@ def run_discovery(symbols: str, start_date: str = "2020-04-01",
         'k': k,
         'start_date': start_date,
         'rolling': rolling,
+        'residualization_method': residualization_method,
+        'residualization_window': residualization_window,
+        'residualization_halflife': residualization_halflife,
+        'residualization_min_observations': residualization_min_observations,
+        'residualization_kalman_process_variance': residualization_kalman_process_variance,
+        'residualization_kalman_observation_variance': residualization_kalman_observation_variance,
+        'residualization_kalman_initial_covariance': residualization_kalman_initial_covariance,
         'resolved_symbols': len(loadings.index),
         'factor_names_file': name_out
     }
@@ -377,7 +454,14 @@ def main():
         method=args.method,
         k=args.k,
         rolling=args.rolling,
-        name_out=args.name_out
+        name_out=args.name_out,
+        residualization_method=args.residualization_method,
+        residualization_window=args.residualization_window,
+        residualization_halflife=args.residualization_halflife,
+        residualization_min_observations=args.residualization_min_observations,
+        residualization_kalman_process_variance=args.residualization_kalman_process_variance,
+        residualization_kalman_observation_variance=args.residualization_kalman_observation_variance,
+        residualization_kalman_initial_covariance=args.residualization_kalman_initial_covariance,
     )
 
 
@@ -468,13 +552,38 @@ def _fit(ret: pd.DataFrame, args: argparse.Namespace, cache_backend=None):
     - Ensures consistent parameter passing to factor discovery methods
     - Automatic residualization and orthogonalization are always applied
     """
+    residual_kwargs = {
+        "residualization_method": getattr(args, "residualization_method", "rolling"),
+        "residualization_window": getattr(args, "residualization_window", 126),
+        "residualization_halflife": getattr(args, "residualization_halflife", 63.0),
+        "residualization_min_observations": getattr(
+            args, "residualization_min_observations", 30
+        ),
+        "residualization_kalman_process_variance": getattr(
+            args, "residualization_kalman_process_variance", 1e-5
+        ),
+        "residualization_kalman_observation_variance": getattr(
+            args, "residualization_kalman_observation_variance", None
+        ),
+        "residualization_kalman_initial_covariance": getattr(
+            args, "residualization_kalman_initial_covariance", 10.0
+        ),
+    }
+
     if args.method == "AE":
-        return autoencoder_factors(ret, k=args.k, cache_backend=cache_backend)
-    else:
-        return statistical_factors(ret,
-                                   n_components=args.k,
-                                   method=StatMethod[args.method],
-                                   cache_backend=cache_backend)
+        return autoencoder_factors(
+            ret,
+            k=args.k,
+            cache_backend=cache_backend,
+            **residual_kwargs,
+        )
+    return statistical_factors(
+        ret,
+        n_components=args.k,
+        method=StatMethod[args.method],
+        cache_backend=cache_backend,
+        **residual_kwargs,
+    )
 
 
 if __name__ == "__main__":

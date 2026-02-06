@@ -34,8 +34,8 @@ the "Beta in Disguise" problem where PCA/ICA rediscovers market beta and sector
 exposures instead of true alpha factors.
 
 The residualization process:
-1. Regress stock returns against SPY (market beta removal)
-2. Regress residuals against sector ETFs (sector exposure removal)
+1. Estimate time-varying stock beta against SPY (market beta removal)
+2. Estimate time-varying sector betas on residuals (sector exposure removal)
 3. Run factor discovery on pure idiosyncratic returns
 
 Factor Orthogonality
@@ -89,7 +89,6 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA, FastICA, NMF, SparsePCA, FactorAnalysis
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression
 
 # Lazy imports for data fetching - only loaded when needed
 def _get_data_backend():
@@ -231,11 +230,156 @@ def _fetch_benchmark_returns(
         return None, None
 
 
+def _time_varying_residuals(
+    y: pd.Series,
+    X: pd.DataFrame,
+    method: str,
+    window: int,
+    min_observations: int,
+    ewm_halflife: float,
+    kalman_process_variance: float,
+    kalman_observation_variance: Optional[float],
+    kalman_initial_covariance: float
+) -> pd.Series:
+    """
+    Estimate residuals with time-varying betas using only past information.
+
+    For timestamp t, coefficients are fit on [t-window, t) and applied to x_t.
+    This avoids look-ahead bias from full-sample regressions.
+    """
+    if method not in {"rolling", "ewm", "kalman"}:
+        raise ValueError(f"Unknown residualization method: {method}")
+    if method in {"rolling", "ewm"} and window < min_observations:
+        raise ValueError(
+            f"window ({window}) must be >= min_observations ({min_observations})"
+        )
+    if method == "ewm" and ewm_halflife <= 0:
+        raise ValueError("ewm_halflife must be > 0 for ewm residualization")
+    if method == "kalman" and kalman_process_variance <= 0:
+        raise ValueError(
+            "kalman_process_variance must be > 0 for kalman residualization"
+        )
+    if (
+        method == "kalman"
+        and kalman_observation_variance is not None
+        and kalman_observation_variance <= 0
+    ):
+        raise ValueError("kalman_observation_variance must be > 0 when provided")
+    if method == "kalman" and kalman_initial_covariance <= 0:
+        raise ValueError(
+            "kalman_initial_covariance must be > 0 for kalman residualization"
+        )
+
+    aligned = pd.concat([y.rename("y"), X], axis=1).dropna()
+    residuals = pd.Series(np.nan, index=y.index, dtype=float)
+    if aligned.empty:
+        return residuals
+
+    y_vals = aligned.iloc[:, 0].to_numpy(dtype=float)
+    X_vals = aligned.iloc[:, 1:].to_numpy(dtype=float)
+    idx = aligned.index
+
+    if method == "kalman":
+        n_obs = len(aligned)
+        n_features = X_vals.shape[1] + 1  # intercept + exposures
+        kalman_residuals = np.full(n_obs, np.nan, dtype=float)
+        if n_obs < min_observations:
+            return residuals
+
+        # Initialize state from a pre-sample OLS fit.
+        X_init = np.column_stack(
+            [np.ones(min_observations, dtype=float), X_vals[:min_observations]]
+        )
+        y_init = y_vals[:min_observations]
+        theta = np.linalg.lstsq(X_init, y_init, rcond=None)[0]
+
+        if kalman_observation_variance is None:
+            init_residuals = y_init - (X_init @ theta)
+            obs_var = float(np.var(init_residuals))
+            obs_var = max(obs_var, 1e-8)
+        else:
+            obs_var = float(kalman_observation_variance)
+
+        # Random-walk state covariance with small process drift.
+        q_scale = kalman_process_variance * obs_var
+        Q = np.eye(n_features, dtype=float) * q_scale
+        P = np.eye(n_features, dtype=float) * (kalman_initial_covariance * obs_var)
+        R = obs_var
+
+        for t in range(min_observations, n_obs):
+            # Predict with information up to t-1 only.
+            theta_pred = theta
+            P_pred = P + Q
+            h_t = np.concatenate(([1.0], X_vals[t]))
+
+            y_hat = float(h_t @ theta_pred)
+            innovation = y_vals[t] - y_hat
+            kalman_residuals[t] = innovation
+
+            s_t = float(h_t @ P_pred @ h_t + R)
+            s_t = max(s_t, 1e-10)
+            k_t = (P_pred @ h_t) / s_t
+
+            theta = theta_pred + k_t * innovation
+            P = P_pred - np.outer(k_t, h_t) @ P_pred
+            P = 0.5 * (P + P.T)
+
+        residuals.loc[idx] = kalman_residuals
+        return residuals
+
+    for t in range(len(aligned)):
+        if t < min_observations:
+            continue
+
+        start = max(0, t - window)
+        y_hist = y_vals[start:t]
+        X_hist = X_vals[start:t]
+        if len(y_hist) < min_observations:
+            continue
+
+        design = np.column_stack([np.ones(len(y_hist), dtype=float), X_hist])
+        if method == "ewm":
+            # Recent observations receive higher weight (WLS via row scaling).
+            ages = np.arange(len(y_hist) - 1, -1, -1, dtype=float)
+            weights = np.power(0.5, ages / ewm_halflife)
+            sqrt_w = np.sqrt(weights)
+            design = design * sqrt_w[:, None]
+            y_fit = y_hist * sqrt_w
+        else:
+            y_fit = y_hist
+
+        coeffs = np.linalg.lstsq(design, y_fit, rcond=None)[0]
+        x_t = np.concatenate(([1.0], X_vals[t]))
+        y_hat = float(np.dot(x_t, coeffs))
+        residuals.loc[idx[t]] = y_vals[t] - y_hat
+
+    return residuals
+
+
+def _residual_r2(y: pd.Series, residuals: pd.Series) -> float:
+    """Compute R² implied by residual series on overlapping non-NaN timestamps."""
+    aligned = pd.concat([y.rename("y"), residuals.rename("resid")], axis=1).dropna()
+    if aligned.empty:
+        return 0.0
+
+    resid_vals = aligned["resid"].to_numpy(dtype=float)
+    y_vals = aligned["y"].to_numpy(dtype=float)
+    ss_res = float(np.sum(resid_vals ** 2))
+    ss_tot = float(np.sum((y_vals - y_vals.mean()) ** 2))
+    return 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+
 def residualize_returns(
     returns: pd.DataFrame,
     market_returns: pd.Series,
     sector_returns: Optional[pd.DataFrame] = None,
     min_observations: int = 30,
+    method: str = "rolling",
+    rolling_window: int = 126,
+    ewm_halflife: float = 63.0,
+    kalman_process_variance: float = 1e-5,
+    kalman_observation_variance: Optional[float] = None,
+    kalman_initial_covariance: float = 10.0,
     verbose: bool = True
 ) -> pd.DataFrame:
     """
@@ -248,8 +392,8 @@ def residualize_returns(
     
     Mathematical Process:
     --------------------
-    1. Regress each stock against market: R_i = α_i + β_i × R_mkt + ε_i
-    2. Regress residuals against sectors: ε_i = α'_i + Σ γ_ij × R_sector_j + η_i
+    1. Fit time-varying market beta (rolling/EWM/Kalman): R_i,t = α_i,t + β_i,t × R_mkt,t + ε_i,t
+    2. Fit time-varying sector betas on ε_i,t: ε_i,t = α'_i,t + Σ γ_ij,t × R_sector_j,t + η_i,t
     3. Return η_i - the pure stock-specific returns
     
     Parameters
@@ -261,7 +405,23 @@ def residualize_returns(
     sector_returns : pd.DataFrame, optional
         Sector ETF returns for additional cleaning
     min_observations : int, default 30
-        Minimum observations required for regression
+        Minimum historical observations required before first beta estimate
+    method : str, default "rolling"
+        Time-varying beta estimator:
+        - "rolling": rolling OLS with fixed lookback
+        - "ewm": exponentially-weighted OLS
+        - "kalman": state-space random-walk beta filter
+    rolling_window : int, default 126
+        Lookback window used for rolling/EWM regressions
+    ewm_halflife : float, default 63.0
+        Half-life for exponentially-weighted regression (used when method="ewm")
+    kalman_process_variance : float, default 1e-5
+        Process noise scale for beta drift when method="kalman"
+    kalman_observation_variance : float | None, default None
+        Observation noise variance for method="kalman". If None, estimated
+        from initial in-sample residuals.
+    kalman_initial_covariance : float, default 10.0
+        Initial state covariance scale for method="kalman"
     verbose : bool, default True
         Log R² statistics for diagnostics
         
@@ -272,10 +432,34 @@ def residualize_returns(
         
     Notes
     -----
-    - Mean market R² typically 0.15-0.35 for diversified stocks
-    - Additional sector R² typically 0.05-0.15
-    - Residual returns have ~30-50% lower volatility than raw returns
+    - Coefficients at time t are estimated only from data before t (no look-ahead)
+    - Mean market R² is typically 0.15-0.35 for diversified stocks
+    - Additional sector R² is typically 0.05-0.15
     """
+    if min_observations < 2:
+        raise ValueError("min_observations must be >= 2")
+    if method not in {"rolling", "ewm", "kalman"}:
+        raise ValueError(f"Unknown residualization method: {method}")
+    if method == "kalman" and kalman_process_variance <= 0:
+        raise ValueError("kalman_process_variance must be > 0")
+    if (
+        method == "kalman"
+        and kalman_observation_variance is not None
+        and kalman_observation_variance <= 0
+    ):
+        raise ValueError("kalman_observation_variance must be > 0 when provided")
+    if method == "kalman" and kalman_initial_covariance <= 0:
+        raise ValueError("kalman_initial_covariance must be > 0")
+
+    effective_window = rolling_window
+    if method in {"rolling", "ewm"}:
+        effective_window = max(rolling_window, min_observations)
+    if method in {"rolling", "ewm"} and rolling_window < min_observations and verbose:
+        _LOG.info(
+            "rolling_window=%d < min_observations=%d; using window=%d",
+            rolling_window, min_observations, effective_window
+        )
+
     residual_returns = returns.copy()
     market_r2_list = []
     sector_r2_list = []
@@ -288,67 +472,65 @@ def residualize_returns(
     if len(common_idx) < min_observations:
         _LOG.error("Insufficient market data overlap for residualization")
         return returns
+
+    sector_aligned = None
+    if sector_returns is not None and len(sector_returns.columns) > 0:
+        sector_aligned = sector_returns.reindex(common_idx)
     
     for stock in returns.columns:
         stock_data = returns.loc[common_idx, stock].dropna()
-        valid_idx = stock_data.index
-        
-        if len(valid_idx) < min_observations:
+        if len(stock_data) < min_observations:
             insufficient_data.append(stock)
             continue
-        
-        y = stock_data.values.reshape(-1, 1)
-        X_mkt = market_aligned.loc[valid_idx].values.reshape(-1, 1)
-        
-        # Step 1: Market regression
-        model_mkt = LinearRegression().fit(X_mkt, y)
-        y_pred = model_mkt.predict(X_mkt)
-        residuals = y.flatten() - y_pred.flatten()
-        
-        # Calculate R²
-        ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((y.flatten() - y.mean()) ** 2)
-        r2_mkt = 1 - ss_res / ss_tot if ss_tot > 0 else 0
-        market_r2_list.append(r2_mkt)
-        
-        # Step 2: Sector regression (if provided)
-        if sector_returns is not None:
-            sect_aligned = sector_returns.reindex(valid_idx).dropna()
-            sect_common = sect_aligned.index.intersection(valid_idx)
-            
-            if len(sect_common) >= min_observations and len(sector_returns.columns) > 0:
-                y_sect = residuals[valid_idx.get_indexer(sect_common)]
-                X_sect = sect_aligned.loc[sect_common].values
-                
-                # Check for multicollinearity
-                if np.linalg.matrix_rank(X_sect) < X_sect.shape[1]:
-                    # Remove highly correlated sector columns
-                    corr_matrix = np.corrcoef(X_sect.T)
-                    upper_tri = np.triu(corr_matrix, k=1)
-                    redundant = np.where(np.abs(upper_tri) > 0.95)
-                    cols_to_keep = set(range(X_sect.shape[1]))
-                    for i, j in zip(redundant[0], redundant[1]):
-                        cols_to_keep.discard(j)
-                    X_sect = X_sect[:, list(cols_to_keep)]
-                
-                if X_sect.shape[1] > 0:
-                    model_sect = LinearRegression().fit(X_sect, y_sect.reshape(-1, 1))
-                    y_pred_sect = model_sect.predict(X_sect)
-                    residuals = y_sect.flatten() - y_pred_sect.flatten()
-                    
-                    # Calculate additional R²
-                    ss_res_sect = np.sum(residuals ** 2)
-                    ss_tot_sect = np.sum((y_sect - y_sect.mean()) ** 2)
-                    r2_sect = 1 - ss_res_sect / ss_tot_sect if ss_tot_sect > 0 else 0
-                    sector_r2_list.append(r2_sect)
-                    
-                    residual_returns.loc[sect_common, stock] = residuals
-                else:
-                    residual_returns.loc[valid_idx, stock] = residuals
-            else:
-                residual_returns.loc[valid_idx, stock] = residuals
-        else:
-            residual_returns.loc[valid_idx, stock] = residuals
+
+        stock_residual = stock_data.copy()
+
+        # Step 1: Time-varying market beta removal
+        market_resid = _time_varying_residuals(
+            y=stock_data,
+            X=market_aligned.loc[stock_data.index].to_frame(name=MARKET_ETF),
+            method=method,
+            window=effective_window,
+            min_observations=min_observations,
+            ewm_halflife=ewm_halflife,
+            kalman_process_variance=kalman_process_variance,
+            kalman_observation_variance=kalman_observation_variance,
+            kalman_initial_covariance=kalman_initial_covariance
+        )
+
+        market_pred_idx = market_resid.dropna().index
+        if len(market_pred_idx) == 0:
+            insufficient_data.append(stock)
+            continue
+
+        stock_residual.loc[market_pred_idx] = market_resid.loc[market_pred_idx]
+        market_r2_list.append(_residual_r2(stock_data, market_resid))
+
+        # Step 2: Time-varying sector beta removal on market-residualized series
+        if sector_aligned is not None:
+            stage1_resid = market_resid.dropna()
+            if len(stage1_resid) >= min_observations:
+                sect_data = sector_aligned.loc[stage1_resid.index].dropna()
+
+                if len(sect_data) >= min_observations:
+                    stage1_aligned = stage1_resid.loc[sect_data.index]
+                    sector_resid = _time_varying_residuals(
+                        y=stage1_aligned,
+                        X=sect_data,
+                        method=method,
+                        window=effective_window,
+                        min_observations=min_observations,
+                        ewm_halflife=ewm_halflife,
+                        kalman_process_variance=kalman_process_variance,
+                        kalman_observation_variance=kalman_observation_variance,
+                        kalman_initial_covariance=kalman_initial_covariance
+                    )
+                    sector_pred_idx = sector_resid.dropna().index
+                    if len(sector_pred_idx) > 0:
+                        stock_residual.loc[sector_pred_idx] = sector_resid.loc[sector_pred_idx]
+                        sector_r2_list.append(_residual_r2(stage1_aligned, sector_resid))
+
+        residual_returns.loc[stock_residual.index, stock] = stock_residual
     
     if verbose:
         if market_r2_list:
@@ -458,7 +640,14 @@ def statistical_factors(
     whiten: bool = True,
     skip_residualization: bool = False,
     skip_orthogonalization: bool = False,
-    cache_backend=None
+    cache_backend=None,
+    residualization_method: str = "rolling",
+    residualization_window: int = 126,
+    residualization_halflife: float = 63.0,
+    residualization_min_observations: int = 30,
+    residualization_kalman_process_variance: float = 1e-5,
+    residualization_kalman_observation_variance: Optional[float] = None,
+    residualization_kalman_initial_covariance: float = 10.0
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Discover latent factors using classical statistical methods.
@@ -492,6 +681,22 @@ def statistical_factors(
         Pre-initialized backend for fetching benchmark data efficiently.
         This can be a `DataBackend` or any object implementing `get_prices(...)`,
         including `FactorResearchSystem`.
+    residualization_method : str, default "rolling"
+        Time-varying beta method used during benchmark residualization:
+        "rolling", "ewm", or "kalman".
+    residualization_window : int, default 126
+        Lookback window (trading days) for time-varying beta estimation.
+    residualization_halflife : float, default 63.0
+        Half-life for exponentially weighted residualization when
+        `residualization_method="ewm"`.
+    residualization_min_observations : int, default 30
+        Minimum lookback observations required before residualizing a timestamp.
+    residualization_kalman_process_variance : float, default 1e-5
+        Process noise scale for Kalman residualization.
+    residualization_kalman_observation_variance : float | None, default None
+        Observation noise variance for Kalman residualization.
+    residualization_kalman_initial_covariance : float, default 10.0
+        Initial state covariance scale for Kalman residualization.
         
     Returns
     -------
@@ -519,6 +724,13 @@ def statistical_factors(
                 returns, 
                 market_returns=market_returns,
                 sector_returns=sector_returns,
+                min_observations=residualization_min_observations,
+                method=residualization_method,
+                rolling_window=residualization_window,
+                ewm_halflife=residualization_halflife,
+                kalman_process_variance=residualization_kalman_process_variance,
+                kalman_observation_variance=residualization_kalman_observation_variance,
+                kalman_initial_covariance=residualization_kalman_initial_covariance,
                 verbose=True
             )
         else:
@@ -632,7 +844,14 @@ def autoencoder_factors(
     batch: int = 64,
     device: str | None = None,
     skip_residualization: bool = False,
-    cache_backend=None
+    cache_backend=None,
+    residualization_method: str = "rolling",
+    residualization_window: int = 126,
+    residualization_halflife: float = 63.0,
+    residualization_min_observations: int = 30,
+    residualization_kalman_process_variance: float = 1e-5,
+    residualization_kalman_observation_variance: Optional[float] = None,
+    residualization_kalman_initial_covariance: float = 10.0
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Discover latent factors using neural network autoencoder.
@@ -660,6 +879,22 @@ def autoencoder_factors(
         Skip market/sector residualization (not recommended)
     cache_backend : DataBackend-compatible, optional
         Pre-initialized backend for benchmark fetching
+    residualization_method : str, default "rolling"
+        Time-varying beta method used during benchmark residualization:
+        "rolling", "ewm", or "kalman".
+    residualization_window : int, default 126
+        Lookback window (trading days) for time-varying beta estimation.
+    residualization_halflife : float, default 63.0
+        Half-life for exponentially weighted residualization when
+        `residualization_method="ewm"`.
+    residualization_min_observations : int, default 30
+        Minimum lookback observations required before residualizing a timestamp.
+    residualization_kalman_process_variance : float, default 1e-5
+        Process noise scale for Kalman residualization.
+    residualization_kalman_observation_variance : float | None, default None
+        Observation noise variance for Kalman residualization.
+    residualization_kalman_initial_covariance : float, default 10.0
+        Initial state covariance scale for Kalman residualization.
         
     Returns
     -------
@@ -681,6 +916,13 @@ def autoencoder_factors(
                 returns, 
                 market_returns=market_returns,
                 sector_returns=sector_returns,
+                min_observations=residualization_min_observations,
+                method=residualization_method,
+                rolling_window=residualization_window,
+                ewm_halflife=residualization_halflife,
+                kalman_process_variance=residualization_kalman_process_variance,
+                kalman_observation_variance=residualization_kalman_observation_variance,
+                kalman_initial_covariance=residualization_kalman_initial_covariance,
                 verbose=True
             )
         else:
